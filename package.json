@@ -82,23 +82,7 @@
         "title": "Herdr: Diagnose"
       }
     ],
-    "keybindings": [
-      {
-        "command": "herdr.switchConversation",
-        "key": "alt+a",
-        "mac": "cmd+alt+a"
-      },
-      {
-        "command": "herdr.switchNext",
-        "key": "alt+]",
-        "mac": "cmd+alt+]"
-      },
-      {
-        "command": "herdr.switchPrev",
-        "key": "alt+[",
-        "mac": "cmd+alt+["
-      }
-    ],
+
     "configuration": {
       "title": "Herdr",
       "properties": {

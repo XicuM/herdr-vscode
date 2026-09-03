@@ -423,7 +423,7 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000);
   statusBarItem.command = 'herdr.switchConversation';
   statusBarItem.text = '$(terminal) Herdr';
-  statusBarItem.tooltip = 'Herdr Agent Switcher (Alt+A)';
+  statusBarItem.tooltip = 'Herdr Agent Switcher';
   statusBarItem.show();
 
   attender.setOnFocus((conv) => {

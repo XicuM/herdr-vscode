@@ -85,7 +85,11 @@ export class HerdrClient {
 
   isAvailable(): boolean {
     try {
-      return fs.existsSync(this.getSocketPath()) && fs.existsSync('/usr/bin/herdr');
+      const hasBinary =
+        fs.existsSync('/usr/bin/herdr') ||
+        fs.existsSync('/usr/local/bin/herdr') ||
+        fs.existsSync(path.join(os.homedir(), '.local', 'bin', 'herdr'));
+      return fs.existsSync(this.getSocketPath()) && hasBinary;
     } catch {
       return false;
     }
