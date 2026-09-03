@@ -1,0 +1,112 @@
+{
+  "name": "herdr-vscode",
+  "displayName": "Herdr",
+  "description": "Herdr AI coding agent integration for VS Code: status bar monitor, fast switcher, and focus-on-blocked.",
+  "version": "0.2.0",
+  "publisher": "xicu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/XicuM/herdr-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:herdr.switchConversation",
+    "onCommand:herdr.openConversation",
+    "onCommand:herdr.closeConversation",
+    "onCommand:herdr.newConversation",
+    "onCommand:herdr.diagnose",
+    "onCommand:herdr.refresh"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "herdr.switchConversation",
+        "title": "Herdr: Switch Agent Conversation",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "herdr.switchNext",
+        "title": "Herdr: Next Agent Conversation",
+        "icon": "$(arrow-right)"
+      },
+      {
+        "command": "herdr.switchPrev",
+        "title": "Herdr: Previous Agent Conversation",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "herdr.newConversation",
+        "title": "Herdr: New Agent Conversation",
+        "icon": "$(plus)"
+      },
+      {
+        "command": "herdr.openConversation",
+        "title": "Herdr: Open Conversation"
+      },
+      {
+        "command": "herdr.closeConversation",
+        "title": "Herdr: Close Conversation"
+      },
+      {
+        "command": "herdr.openMasterTerminal",
+        "title": "Herdr: Open Master Terminal",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "herdr.refresh",
+        "title": "Herdr: Refresh Conversations",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "herdr.diagnose",
+        "title": "Herdr: Diagnose"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "herdr.switchConversation",
+        "key": "alt+a",
+        "mac": "cmd+alt+a"
+      },
+      {
+        "command": "herdr.switchNext",
+        "key": "alt+]",
+        "mac": "cmd+alt+]"
+      },
+      {
+        "command": "herdr.switchPrev",
+        "key": "alt+[",
+        "mac": "cmd+alt+["
+      }
+    ],
+    "configuration": {
+      "title": "Herdr",
+      "properties": {
+        "herdr.focusOnBlocked": {
+          "type": "boolean",
+          "default": true,
+          "description": "When an agent becomes blocked (waiting for input), focus its VS Code terminal."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies",
+    "build": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}
