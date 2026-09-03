@@ -2,7 +2,7 @@
   "name": "herdr-companion",
   "displayName": "Herdr Companion",
   "description": "Herdr AI coding agent integration for VS Code: status bar monitor, fast switcher, and focus-on-blocked.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "xicu",
   "license": "MIT",
   "repository": {
