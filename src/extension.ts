@@ -142,7 +142,47 @@ function attachTerminal(conv: Conversation) {
   currentActiveTabId = conv.tab_id;
   const term = ensureHerdrTerminal();
   term.show(true);
-  client.focusTab(conv.tab_id);
+  client.focusWorkspace(conv.workspace_id).catch(() => {});
+  client.focusTab(conv.tab_id).catch(() => {});
+}
+
+async function focusWorkspace() {
+  if (!client.isAvailable()) return;
+  const folder = currentFolder();
+  let snap: Snapshot;
+  try {
+    snap = await client.snapshot();
+  } catch {
+    return;
+  }
+  let ws = resolver.findWorkspaceForFolder(snap, folder);
+  let wsId = ws?.workspace_id;
+  if (!wsId) {
+    wsId = await resolver.ensureWorkspace(folder, snap);
+  }
+  if (wsId) {
+    await client.focusWorkspace(wsId);
+    ensureHerdrTerminal().show(true);
+    refreshState();
+  }
+}
+
+async function newShellTab() {
+  if (!client.isAvailable()) {
+    vscode.window.showErrorMessage('Herdr is not running. Start it in a terminal (`herdr`).');
+    return;
+  }
+  const folder = currentFolder();
+  const snap = await client.snapshot();
+  const workspaceId = await resolver.ensureWorkspace(folder, snap);
+  ensureHerdrTerminal().show(true);
+  await client.focusWorkspace(workspaceId);
+  const tabRes = await client.createTab(workspaceId, 'shell', true);
+  if (tabRes?.tab?.tab_id) {
+    currentActiveTabId = tabRes.tab.tab_id;
+    await client.focusTab(tabRes.tab.tab_id);
+  }
+  refreshState();
 }
 
 async function newConversation() {
@@ -159,8 +199,9 @@ async function newConversation() {
   const snapshot = await client.snapshot();
   const workspaceId = await resolver.ensureWorkspace(folder, snapshot);
 
-  // Ensure the single Herdr master terminal is visible
+  // Ensure the single Herdr master terminal is visible and focused on this workspace
   ensureHerdrTerminal().show(true);
+  await client.focusWorkspace(workspaceId);
 
   // Focus the new tab so its shell becomes an "available shell" for agent.start.
   const tabRes = await client.createTab(workspaceId, null, true);
@@ -200,6 +241,21 @@ async function openConversation(tabId?: string) {
 async function closeConversation(tabId?: string) {
   const conv = tabId ? convByTab.get(tabId) : undefined;
   if (!conv) return;
+
+  try {
+    const snap = await client.snapshot();
+    const wsTabs = snap.tabs.filter((t) => t.workspace_id === conv.workspace_id);
+    // If closing this tab would leave the workspace empty (<= 1 tab),
+    // spawn a clean shell tab first so Herdr doesn't destroy the workspace
+    // and kick the user out to a different project workspace.
+    if (wsTabs.length <= 1) {
+      const tabRes = await client.createTab(conv.workspace_id, 'shell', true);
+      if (tabRes?.tab?.tab_id) {
+        currentActiveTabId = tabRes.tab.tab_id;
+      }
+    }
+  } catch {}
+
   await client.closeTab(conv.tab_id);
   refreshState();
 }
@@ -209,11 +265,15 @@ async function pickConversation(action: 'Open' | 'Close' | 'Switch') {
   if (convs.length === 0 && action !== 'Close') {
     const pick = await vscode.window.showQuickPick(
       [
-        { label: '$(plus) New Agent Conversation', id: '__new__' },
+        { label: '$(home) Focus / Restore Workspace', id: '__focus__', description: 'Switch Herdr terminal view back to this workspace' },
+        { label: '$(terminal) New Shell Tab', id: '__shell__', description: 'Open a plain shell in this workspace' },
+        { label: '$(plus) New Agent Conversation...', id: '__new__', description: 'Start an agent in a new tab' },
         { label: '$(refresh) Refresh Herdr Status', id: '__refresh__' }
       ],
       { placeHolder: 'No active agent conversations in this workspace' }
     );
+    if (pick?.id === '__focus__') focusWorkspace();
+    if (pick?.id === '__shell__') newShellTab();
     if (pick?.id === '__new__') newConversation();
     if (pick?.id === '__refresh__') refreshState();
     return;
@@ -239,11 +299,23 @@ async function pickConversation(action: 'Open' | 'Close' | 'Switch') {
   });
 
   if (action !== 'Close') {
-    items.push({
-      label: '$(plus) New Agent Conversation...',
-      description: 'Start an agent in a new tab',
-      id: '__new__'
-    });
+    items.push(
+      {
+        label: '$(plus) New Agent Conversation...',
+        description: 'Start an agent in a new tab',
+        id: '__new__'
+      },
+      {
+        label: '$(terminal) New Shell Tab...',
+        description: 'Open a plain shell in this workspace',
+        id: '__shell__'
+      },
+      {
+        label: '$(home) Focus Current Workspace',
+        description: 'Switch Herdr view back to this workspace',
+        id: '__focus__'
+      }
+    );
   }
 
   const sel = await vscode.window.showQuickPick(items, {
@@ -253,6 +325,10 @@ async function pickConversation(action: 'Open' | 'Close' | 'Switch') {
   if (!sel) return;
   if (sel.id === '__new__') {
     newConversation();
+  } else if (sel.id === '__shell__') {
+    newShellTab();
+  } else if (sel.id === '__focus__') {
+    focusWorkspace();
   } else if (action === 'Close') {
     closeConversation(sel.id);
   } else {
@@ -336,7 +412,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   attender.setOnFocus((conv) => {
     ensureHerdrTerminal().show(true);
-    client.focusTab(conv.tab_id);
+    client.focusWorkspace(conv.workspace_id).catch(() => {});
+    client.focusTab(conv.tab_id).catch(() => {});
   });
 
   cleanupSubTerminals();
@@ -358,6 +435,8 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   registerCommandSafe(context, 'herdr.openMasterTerminal', () => ensureHerdrTerminal().show(true));
+  registerCommandSafe(context, 'herdr.focusWorkspace', () => focusWorkspace());
+  registerCommandSafe(context, 'herdr.newShellTab', () => newShellTab());
   registerCommandSafe(context, 'herdr.newConversation', () => newConversation());
   registerCommandSafe(context, 'herdr.switchConversation', () => pickConversation('Switch'));
   registerCommandSafe(context, 'herdr.switchNext', () => switchNext());
@@ -369,6 +448,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   setupRefresh();
   refreshState();
+  focusWorkspace().catch(() => {});
 
   client
     .subscribeEvents((evt) => {

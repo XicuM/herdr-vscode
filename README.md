@@ -1,4 +1,4 @@
-# Herdr (VS Code extension)
+# Herdr Companion (VS Code extension)
 
 A fast, lightweight VS Code extension for managing AI coding agent conversations
 (opencode, claude, codex, grok, agy, copilot, etc.) backed by [Herdr](https://herdr.dev).

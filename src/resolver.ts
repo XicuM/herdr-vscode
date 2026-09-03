@@ -29,16 +29,32 @@ export interface Conversation {
 export class AgentResolver {
   constructor(private client: HerdrClient) {}
 
-  /** Find the Herdr workspace whose root pane cwd equals the folder path. */
+  /** Find the Herdr workspace for a folder path. */
   findWorkspaceForFolder(snapshot: Snapshot, folderPath: string): Workspace | null {
     const norm = path.resolve(folderPath);
-    for (const w of snapshot.workspaces) {
-      const root = snapshot.panes.find(
-        (p) => p.workspace_id === w.workspace_id && /:p1$/.test(p.pane_id || '')
+    const folderBase = path.basename(norm);
+
+    // 1. Check workspace with matching label and at least one pane in this folder
+    const matchingByLabel = snapshot.workspaces.filter((w) => w.label === folderBase);
+    for (const w of matchingByLabel) {
+      const hasPaneInFolder = snapshot.panes.some(
+        (p) => p.workspace_id === w.workspace_id && path.resolve(p.cwd || p.foreground_cwd || '') === norm
       );
-      if (root && path.resolve(root.cwd || '') === norm) return w;
+      if (hasPaneInFolder) return w;
     }
-    return snapshot.workspaces.find((w) => w.label === path.basename(norm)) || null;
+
+    // 2. Check any workspace where any pane has cwd matching folder path
+    for (const w of snapshot.workspaces) {
+      const hasPaneInFolder = snapshot.panes.some(
+        (p) => p.workspace_id === w.workspace_id && path.resolve(p.cwd || p.foreground_cwd || '') === norm
+      );
+      if (hasPaneInFolder) return w;
+    }
+
+    // 3. Fall back to label match
+    if (matchingByLabel.length > 0) return matchingByLabel[0];
+
+    return null;
   }
 
   /** Ensure a folder has a Herdr workspace; create it if missing. Returns id. */

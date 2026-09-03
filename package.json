@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/XicuM/herdr-vscode.git"
+    "url": "https://github.com/XicuM/herdr-companion.git"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -21,6 +21,8 @@
     "onCommand:herdr.openConversation",
     "onCommand:herdr.closeConversation",
     "onCommand:herdr.newConversation",
+    "onCommand:herdr.focusWorkspace",
+    "onCommand:herdr.newShellTab",
     "onCommand:herdr.diagnose",
     "onCommand:herdr.refresh"
   ],
@@ -58,6 +60,16 @@
       {
         "command": "herdr.openMasterTerminal",
         "title": "Herdr: Open Master Terminal",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "herdr.focusWorkspace",
+        "title": "Herdr: Focus Current Workspace",
+        "icon": "$(home)"
+      },
+      {
+        "command": "herdr.newShellTab",
+        "title": "Herdr: New Shell Tab",
         "icon": "$(terminal)"
       },
       {
