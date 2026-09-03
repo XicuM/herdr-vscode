@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 import { HerdrClient, Snapshot, HARNESS_KINDS } from './herdrClient';
 import { AgentResolver, Conversation } from './resolver';
 import { AgentAttender, statusEmoji } from './notifier';
@@ -12,8 +14,12 @@ let convByTab = new Map<string, Conversation>();
 let statusBarItem: vscode.StatusBarItem;
 let currentActiveTabId: string | undefined;
 
-function getCfg(): { focusOnBlocked: boolean } {
-  return { focusOnBlocked: vscode.workspace.getConfiguration('herdr').get('focusOnBlocked', true) };
+function getCfg(): { focusOnBlocked: boolean; session: string } {
+  const conf = vscode.workspace.getConfiguration('herdr');
+  return {
+    focusOnBlocked: conf.get('focusOnBlocked', true),
+    session: conf.get('session', 'vscode')
+  };
 }
 
 function currentFolder(): string {
@@ -117,7 +123,7 @@ function ensureHerdrTerminal(): vscode.Terminal {
       name: HERDR_TERMINAL_NAME,
       iconPath: new vscode.ThemeIcon('beaker'),
       color: new vscode.ThemeColor('terminal.ansiCyan'),
-      message: 'Herdr AI Coding Agent Workspace',
+      message: 'Herdr AI Coding Agent Workspace (Isolated Session)',
       env: {
         HERDR_ENV: null,
         HERDR_PANE_ID: null,
@@ -125,7 +131,16 @@ function ensureHerdrTerminal(): vscode.Terminal {
       }
     });
     const folder = currentFolder();
-    term.sendText(`cd "${folder}" && env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID herdr`, true);
+    const cfg = getCfg();
+    const sessionArg = cfg.session ? `--session "${cfg.session}"` : '';
+    const configPath = cfg.session
+      ? path.join(os.homedir(), '.config', 'herdr', 'sessions', cfg.session, 'config.toml')
+      : path.join(os.homedir(), '.config', 'herdr', 'config.toml');
+    const configEnv = fs.existsSync(configPath) ? `HERDR_CONFIG_PATH="${configPath}" ` : '';
+    term.sendText(
+      `cd "${folder}" && env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID ${configEnv}herdr ${sessionArg}`.trim(),
+      true
+    );
   }
   return term;
 }
@@ -400,9 +415,10 @@ function registerCommandSafe(
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  client = new HerdrClient();
+  const cfg = getCfg();
+  client = new HerdrClient(cfg.session);
   resolver = new AgentResolver(client);
-  attender = new AgentAttender(getCfg());
+  attender = new AgentAttender(cfg);
 
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000);
   statusBarItem.command = 'herdr.switchConversation';
@@ -427,6 +443,12 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('herdr.session')) {
+        const newCfg = getCfg();
+        client = new HerdrClient(newCfg.session);
+        resolver = new AgentResolver(client);
+        refreshState();
+      }
       if (e.affectsConfiguration('herdr')) {
         attender.updateConfig(getCfg());
         refreshState();

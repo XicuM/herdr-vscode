@@ -66,8 +66,10 @@ export interface Snapshot {
 
 export class HerdrClient {
   private socketPath: string;
+  public readonly session: string;
 
-  constructor(session = '') {
+  constructor(session = 'vscode') {
+    this.session = session;
     // Match Herdr's socket resolution: default config dir, or named session subdir.
     const base = path.join(os.homedir(), '.config', 'herdr');
     const sockPath = session
@@ -76,7 +78,7 @@ export class HerdrClient {
     this.socketPath = process.env.HERDR_SOCKET_PATH || sockPath;
   }
 
-  private getSocketPath(): string {
+  getSocketPath(): string {
     if (process.env.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH;
     return this.socketPath;
   }
@@ -89,9 +91,42 @@ export class HerdrClient {
     }
   }
 
-  private rawRequest(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  async ensureServerRunning(): Promise<boolean> {
+    if (this.isAvailable()) return true;
+    const sockPath = this.getSocketPath();
+    if (fs.existsSync(sockPath)) return true;
+
+    if (this.session) {
+      const sessionDir = path.join(os.homedir(), '.config', 'herdr', 'sessions', this.session);
+      if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+      }
+      const configPath = path.join(sessionDir, 'config.toml');
+      const env = {
+        ...process.env,
+        ...(fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
+      };
+      const child = spawn('herdr', ['--session', this.session, 'server'], {
+        detached: true,
+        stdio: 'ignore',
+        env
+      });
+      child.unref();
+
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        if (fs.existsSync(sockPath)) return true;
+      }
+    }
+    return this.isAvailable();
+  }
+
+  private async rawRequest(method: string, params: Record<string, unknown> = {}): Promise<any> {
+    const sockPath = this.getSocketPath();
+    if (!fs.existsSync(sockPath)) {
+      await this.ensureServerRunning();
+    }
     return new Promise((resolve, reject) => {
-      const sockPath = this.getSocketPath();
       if (!fs.existsSync(sockPath)) {
         return reject(new Error(`Herdr socket not found: ${sockPath}. Is the Herdr server running?`));
       }
@@ -255,8 +290,11 @@ export class HerdrClient {
     params: Record<string, unknown>,
     timeoutMs: number
   ): Promise<any> {
+    const sockPath = this.getSocketPath();
+    if (!fs.existsSync(sockPath)) {
+      await this.ensureServerRunning();
+    }
     const resp = await new Promise<any>((resolve, reject) => {
-      const sockPath = this.getSocketPath();
       if (!fs.existsSync(sockPath)) {
         return reject(new Error(`Herdr socket not found: ${sockPath}. Is the Herdr server running?`));
       }
@@ -297,6 +335,9 @@ export class HerdrClient {
 
   async subscribeEvents(cb: (evt: any) => void): Promise<() => void> {
     const sockPath = this.getSocketPath();
+    if (!fs.existsSync(sockPath)) {
+      await this.ensureServerRunning();
+    }
     if (!fs.existsSync(sockPath)) {
       throw new Error(`Herdr socket not found: ${sockPath}`);
     }
@@ -363,11 +404,19 @@ export class HerdrClient {
 
 // ---- Subprocess helpers for one-shot CLI actions not covered by raw methods ----
 
-export function runHerdr(args: string[], cwd?: string): Promise<{ stdout: string; stderr: string; code: number }> {
+export function runHerdr(args: string[], cwd?: string, session = 'vscode'): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const child = spawn('herdr', args, {
+    const sessionArgs = session ? ['--session', session, ...args] : args;
+    const sessionDir = session ? path.join(os.homedir(), '.config', 'herdr', 'sessions', session) : '';
+    const configPath = sessionDir ? path.join(sessionDir, 'config.toml') : '';
+    const env = {
+      ...process.env,
+      HERDR_ENV: '1',
+      ...(configPath && fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
+    };
+    const child = spawn('herdr', sessionArgs, {
       cwd: cwd || process.cwd(),
-      env: { ...process.env, HERDR_ENV: '1' }
+      env
     });
     let stdout = '';
     let stderr = '';
