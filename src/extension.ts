@@ -116,8 +116,22 @@ async function refreshState() {
 
 const HERDR_TERMINAL_NAME = 'Herdr';
 
+function isHerdrTerminal(name: string): boolean {
+  const trimmed = (name || '').trim().toLowerCase();
+  return (
+    trimmed === 'herdr' ||
+    trimmed === 'herdr (offline)' ||
+    trimmed.startsWith('herdr ') ||
+    trimmed.startsWith('herdr:')
+  );
+}
+
+function findHerdrTerminal(): vscode.Terminal | undefined {
+  return vscode.window.terminals.find((t) => isHerdrTerminal(t.name));
+}
+
 function ensureHerdrTerminal(): vscode.Terminal {
-  let term = vscode.window.terminals.find((t) => t.name === HERDR_TERMINAL_NAME);
+  let term = findHerdrTerminal();
   if (!term) {
     term = vscode.window.createTerminal({
       name: HERDR_TERMINAL_NAME,
@@ -146,8 +160,9 @@ function ensureHerdrTerminal(): vscode.Terminal {
 }
 
 function cleanupSubTerminals() {
+  const mainTerm = findHerdrTerminal();
   for (const term of vscode.window.terminals) {
-    if (term.name !== HERDR_TERMINAL_NAME && (term.name.startsWith('herdr:') || term.name.includes('(t'))) {
+    if (term !== mainTerm && (term.name.startsWith('herdr:') || term.name.includes('(t'))) {
       term.dispose();
     }
   }
@@ -161,7 +176,7 @@ function attachTerminal(conv: Conversation) {
   client.focusTab(conv.tab_id).catch(() => {});
 }
 
-async function focusWorkspace() {
+async function focusWorkspace(showTerminal = true) {
   if (!client.isAvailable()) return;
   const folder = currentFolder();
   let snap: Snapshot;
@@ -177,7 +192,9 @@ async function focusWorkspace() {
   }
   if (wsId) {
     await client.focusWorkspace(wsId);
-    ensureHerdrTerminal().show(true);
+    if (showTerminal) {
+      ensureHerdrTerminal().show(true);
+    }
     refreshState();
   }
 }
@@ -433,12 +450,11 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   cleanupSubTerminals();
-  ensureHerdrTerminal().show(true);
 
   context.subscriptions.push(
     statusBarItem,
     vscode.window.onDidCloseTerminal((term) => {
-      if (term.name === HERDR_TERMINAL_NAME) {
+      if (isHerdrTerminal(term.name)) {
         currentActiveTabId = undefined;
       }
     }),
@@ -457,7 +473,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   registerCommandSafe(context, 'herdr.openMasterTerminal', () => ensureHerdrTerminal().show(true));
-  registerCommandSafe(context, 'herdr.focusWorkspace', () => focusWorkspace());
+  registerCommandSafe(context, 'herdr.focusWorkspace', () => focusWorkspace(true));
   registerCommandSafe(context, 'herdr.newShellTab', () => newShellTab());
   registerCommandSafe(context, 'herdr.newConversation', () => newConversation());
   registerCommandSafe(context, 'herdr.switchConversation', () => pickConversation('Switch'));
@@ -470,7 +486,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   setupRefresh();
   refreshState();
-  focusWorkspace().catch(() => {});
+  focusWorkspace(false).catch(() => {});
 
   client
     .subscribeEvents((evt) => {
