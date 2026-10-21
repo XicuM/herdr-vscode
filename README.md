@@ -1,38 +1,157 @@
-# Herdr Companion (VS Code extension)
+# Herdr for VS Code
 
-A fast, lightweight VS Code extension for managing AI coding agent conversations
-(opencode, claude, codex, grok, agy, copilot, etc.) backed by [Herdr](https://herdr.dev).
+![Herdr icon](icon.png)
 
-## Agent Status Mapping
+> **Unofficial.** A community extension for [herdr](https://herdr.dev), not made or endorsed by its authors.
 
-- 🟡 `working` – yellow dot / active processing
-- 🔴 `blocked` – red dot / waiting for your input (triggers notification and brings terminal to foreground)
-- 🟢 `done` – green dot / completed
-- ⚪ `idle` – grey dot / waiting
-- `unknown` – plain shell / no dot
+Herdr is the terminal workspace manager for AI coding agents. This extension brings
+its agents into VS Code: live status in the status bar and activity bar, quick
+switching, focus-on-blocked, and file references in each harness's own syntax —
+while the agents keep running in herdr and the terminal stays the native VS Code
+terminal.
+
+> **Status:** pre-1.0 (`0.4.0`). This is a new Marketplace listing
+> (`xicu.herdr-vscode`) that supersedes `xicu.herdr-companion`: VS Code keys
+> updates on the extension ID, so the old listing will not update into this one.
 
 ## Features
 
-- **Status Bar Live Overview**: Shows active agent conversations and their live statuses directly in the VS Code status bar. Highlights in red when an agent is blocked and waiting for user input.
-- **Fast Switcher**: QuickPick menu to jump between agent terminals, sorted by status priority (blocked first).
-- **Previous / Next Navigation**: Cycle through active agents quickly without touching the mouse.
-- **Focus on Blocked**: Automatically brings the relevant agent terminal into view when it requires input.
-- **Single Master Terminal**: Automatically hosts and connects to Herdr in your workspace folder.
-
-
+- **Live status, no polling.** Herdr's events drive the UI. The status bar shows
+  how many agents are blocked or working; the **Herdr** activity-bar view lists
+  every workspace folder and its agents with status icons.
+- **Focus on blocked.** When an agent *transitions* into blocked, its conversation
+  is revealed and a notification appears. Already-blocked agents at startup never
+  steal focus.
+- **Fast switching.** A QuickPick sorted blocked-first, plus next/previous
+  navigation in herdr's tab order. Clicking the status bar jumps straight to a
+  blocked agent.
+- **One native terminal.** The extension hosts a single herdr TUI terminal with
+  its own session, so VS Code windows do not clutter the desktop session. Native
+  terminal search, links, scrollback and accessibility all keep working.
+- **Send references.** Select code and run **Herdr: Send Selection to Agent** (or
+  the editor context menu). The active harness receives `@path#L10-20` in the
+  syntax it understands.
+- **Rename tabs** without leaving VS Code, and close a conversation without
+  destroying its workspace.
+- **Multi-root folders.** The status bar follows the active editor's folder; the
+  tree shows every folder.
+- **Remote-friendly.** The extension runs where your code runs (Remote-SSH, WSL,
+  dev containers), so it talks to the herdr installed there.
 
 ## Requirements
 
-- Herdr installed and running (`herdr` in a terminal, or `curl -fsSL https://herdr.dev/install.sh | sh`).
-- Linux or macOS.
+- VS Code 1.85 or newer.
+- [herdr](https://herdr.dev) installed and running on the machine where the
+  extension host runs:
 
-## Configuration
+  ```sh
+  herdr
+  # or start a server headlessly:
+  herdr --session vscode server
+  ```
 
-- `herdr.focusOnBlocked` (default `true`) – When an agent becomes `blocked`, bring its VS Code terminal to the foreground and show a notification.
+- Linux or macOS. Windows is not supported yet.
 
-## Build
+The extension talks to herdr over its local Unix socket. It does not need
+herdr-bridge, and it sends nothing off your machine.
+
+## Install
+
+Once the Marketplace listing is live:
+
+```sh
+code --install-extension xicu.herdr-vscode
+```
+
+Or search for **Herdr for VS Code** in the Extensions view. Until then, build a
+VSIX from source (`npm run package`) and use **Extensions: Install from VSIX…**.
+
+## Getting started
+
+1. Start herdr (or enable `herdr.autoStart`).
+2. Open a folder in VS Code and click the Herdr icon in the activity bar.
+3. Run **Herdr: New Agent Conversation** and pick a harness.
+4. The agent appears in the Herdr view and the status bar. Click it to switch.
+
+Commands are available from the Command Palette (`Ctrl/Cmd+Shift+P`) and can be
+bound to keys in **Keyboard Shortcuts**.
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `Herdr: Switch Agent Conversation` | QuickPick of agents, blocked first. |
+| `Herdr: Next / Previous Agent Conversation` | Cycle in herdr's tab order. |
+| `Herdr: New Agent Conversation` | Pick a harness and start it in this folder. |
+| `Herdr: New Shell Tab` | Open a plain shell in this folder's workspace. |
+| `Herdr: Rename Agent Tab` | Rename the active (or picked) tab in herdr. |
+| `Herdr: Close Conversation` | Close a tab, leaving a shell if it was the last one. |
+| `Herdr: Send Selection to Agent` | Insert a file/line reference into the active agent. |
+| `Herdr: Open Herdr Terminal` | Reveal the herdr TUI terminal. |
+| `Herdr: Focus Current Workspace` | Ask herdr to focus this folder's workspace. |
+| `Herdr: Refresh Agents` | Force a snapshot refresh. |
+| `Herdr: Diagnose Connection` | Show socket, session, workspace and tab state. |
+
+## Settings
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `herdr.focusOnBlocked` | `true` | Reveal a conversation when it *transitions* into blocked. |
+| `herdr.session` | `vscode` | Named herdr session, isolated from the desktop session. |
+| `herdr.autoStart` | `false` | Start `herdr server` when no socket exists. |
+| `herdr.defaultHarness` | `claude` | Harness listed first in the new-conversation picker. |
+
+## How it works
+
+- **Transport.** A direct Unix-socket connection to herdr (`session.snapshot`,
+  `events.subscribe`, and the tab/workspace/agent RPCs). No polling: events
+  trigger one queued snapshot, and the event stream reconnects with backoff.
+- **Workspace mapping.** Each VS Code workspace folder maps to one herdr
+  workspace, found by pane `cwd` with a label fallback and created on demand. The
+  status bar follows the active editor's folder.
+- **Terminal.** One `herdr` TUI terminal per VS Code window, launched with the
+  configured session and without inherited `HERDR_*` pane variables. Switching
+  conversations focuses the matching herdr workspace and tab and reveals that
+  terminal.
+- **References.** Each harness gets its own mention syntax:
+
+  | Harness | Reference |
+  | --- | --- |
+  | Claude Code, unknown | `@path#L10-20` |
+  | opencode | `@path#L10-20` |
+  | Codex | `path:10-20` |
+  | Copilot, Grok, Antigravity | `@path:10-20` |
+  | pi | `@path:10-20` |
+  | Shell / no agent | `path:10-20` |
+
+  Paths are relative to the folder; files outside it are sent absolute.
+
+## Troubleshooting
+
+- **`Herdr (offline)`.** Check that herdr is running for the configured session,
+  and run **Herdr: Diagnose Connection** for the socket path and last error.
+- **A different session's tabs.** `herdr.session` must match the session you
+  started. Changing it restarts the extension's herdr terminal.
+- **Remote windows.** Install and run herdr on the remote machine, not only
+  locally.
+- **Wrong terminal focus after switching.** Some terminal shells swallow the
+  focus RPC while a TUI is redrawing; click the terminal once and subsequent
+  switches normally follow.
+
+## Development
 
 ```sh
 npm install
-npm run compile
+npm run compile   # tsc
+npm test          # vitest: resolver, notifier, mention syntax
+npm run package   # build a .vsix with @vscode/vsce
 ```
+
+| Path | Responsibility |
+| --- | --- |
+| `src/extension.ts` | Activation, commands, status bar, terminal, refresh queue. |
+| `src/herdrClient.ts` | Unix-socket RPC, snapshots, event stream with reconnect. |
+| `src/resolver.ts` | Folder → workspace → conversation mapping, status order. |
+| `src/notifier.ts` | Transition-only blocked notifications (pure, injectable). |
+| `src/mentions.ts` | Per-harness file/line reference syntax. |
+| `src/tree.ts` | Activity-bar Herdr view. |

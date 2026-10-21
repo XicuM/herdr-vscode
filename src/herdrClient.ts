@@ -7,23 +7,41 @@ import { spawn } from 'child_process';
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
 export const HARNESS_KINDS = [
-  'opencode',
+  'agy',
+  'amp',
   'claude',
   'codex',
   'copilot',
+  'cursor',
+  'devin',
   'gemini',
-  'agy',
   'grok',
   'kimi',
   'kiro',
-  'qwen',
-  'cursor',
-  'devin',
   'maki',
+  'opencode',
   'pi',
-  'amp'
+  'qwen'
 ] as const;
 export type HarnessKind = (typeof HARNESS_KINDS)[number];
+
+export const HARNESS_LABELS: Record<HarnessKind, string> = {
+  agy: 'Antigravity',
+  amp: 'Amp',
+  claude: 'Claude Code',
+  codex: 'Codex',
+  copilot: 'GitHub Copilot',
+  cursor: 'Cursor',
+  devin: 'Devin',
+  gemini: 'Gemini CLI',
+  grok: 'Grok',
+  kimi: 'Kimi',
+  kiro: 'Kiro',
+  maki: 'Maki',
+  opencode: 'OpenCode',
+  pi: 'Pi',
+  qwen: 'Qwen Code'
+};
 
 export interface Agent {
   agent: string;
@@ -41,7 +59,7 @@ export interface Workspace {
   workspace_id: string;
   label: string;
   active_tab_id?: string;
-  agent_status?: string;
+  agent_status?: AgentStatus;
   pane_count?: number;
   tab_count?: number;
 }
@@ -50,19 +68,41 @@ export interface Tab {
   tab_id: string;
   workspace_id: string;
   label?: string;
-  agent_status?: string;
+  agent_status?: AgentStatus;
   pane_count?: number;
+}
+
+export interface Pane {
+  pane_id: string;
+  tab_id: string;
+  workspace_id: string;
+  cwd?: string;
+  foreground_cwd?: string;
+  agent?: string;
+  agent_status?: AgentStatus;
 }
 
 export interface Snapshot {
   agents: Agent[];
-  panes: any[];
+  panes: Pane[];
   tabs: Tab[];
   workspaces: Workspace[];
   focused_workspace_id?: string;
   focused_tab_id?: string;
   version?: string;
 }
+
+const EVENT_SUBSCRIPTIONS = [
+  'pane.agent_status_changed',
+  'pane.agent_detected',
+  'pane.created',
+  'pane.closed',
+  'tab.created',
+  'tab.closed',
+  'tab.renamed',
+  'workspace.created',
+  'workspace.closed'
+];
 
 export class HerdrClient {
   private socketPath: string;
@@ -83,77 +123,62 @@ export class HerdrClient {
     return this.socketPath;
   }
 
+  /** Cheap synchronous check. A stale socket still fails later, where errors are surfaced. */
   isAvailable(): boolean {
     try {
-      const sockExists = fs.existsSync(this.getSocketPath());
-      if (!sockExists) return false;
-
-      // Check standard locations
-      if (
-        fs.existsSync('/usr/bin/herdr') ||
-        fs.existsSync('/usr/local/bin/herdr') ||
-        fs.existsSync(path.join(os.homedir(), '.local', 'bin', 'herdr')) ||
-        fs.existsSync(path.join(os.homedir(), '.cargo', 'bin', 'herdr'))
-      ) {
-        return true;
-      }
-
-      // Check system PATH
-      const pathEnv = process.env.PATH || '';
-      const pathDirs = pathEnv.split(path.delimiter);
-      for (const dir of pathDirs) {
-        if (!dir) continue;
-        const binPath = path.join(dir, 'herdr');
-        if (fs.existsSync(binPath)) {
-          return true;
-        }
-      }
-
-      return false;
+      return fs.existsSync(this.getSocketPath());
     } catch {
       return false;
     }
   }
 
+  /**
+   * Start `herdr server` for this session. Only called when the user opts into
+   * auto-start: every request must stay side-effect free.
+   */
   async ensureServerRunning(): Promise<boolean> {
     if (this.isAvailable()) return true;
-    const sockPath = this.getSocketPath();
-    if (fs.existsSync(sockPath)) return true;
-
-    if (this.session) {
-      const sessionDir = path.join(os.homedir(), '.config', 'herdr', 'sessions', this.session);
-      if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
-      }
-      const configPath = path.join(sessionDir, 'config.toml');
+    try {
+      const sessionDir = this.session
+        ? path.join(os.homedir(), '.config', 'herdr', 'sessions', this.session)
+        : '';
+      if (sessionDir) fs.mkdirSync(sessionDir, { recursive: true });
+      const configPath = sessionDir ? path.join(sessionDir, 'config.toml') : '';
       const env = {
         ...process.env,
-        ...(fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
+        ...(configPath && fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
       };
-      const child = spawn('herdr', ['--session', this.session, 'server'], {
-        detached: true,
-        stdio: 'ignore',
-        env
+      const args = this.session ? ['--session', this.session, 'server'] : ['server'];
+
+      const child = spawn('herdr', args, { detached: true, stdio: 'ignore', env });
+      child.on('error', () => {
+        // Not installed, or not on PATH: the caller reports the missing socket.
       });
       child.unref();
+    } catch {
+      return false;
+    }
 
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 100));
-        if (fs.existsSync(sockPath)) return true;
-      }
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (this.isAvailable()) return true;
     }
     return this.isAvailable();
   }
 
-  private async rawRequest(method: string, params: Record<string, unknown> = {}): Promise<any> {
-    const sockPath = this.getSocketPath();
-    if (!fs.existsSync(sockPath)) {
-      await this.ensureServerRunning();
-    }
+  private rawRequest(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = 15000
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
+      const sockPath = this.getSocketPath();
       if (!fs.existsSync(sockPath)) {
-        return reject(new Error(`Herdr socket not found: ${sockPath}. Is the Herdr server running?`));
+        return reject(
+          new Error(`Herdr socket not found: ${sockPath}. Start herdr, or enable "herdr.autoStart".`)
+        );
       }
+
       const socket = net.createConnection(sockPath);
       const id = `vscode:${Math.random().toString(36).slice(2)}`;
       let buf = '';
@@ -162,52 +187,40 @@ export class HerdrClient {
       const done = (err: Error | null, data?: any) => {
         if (settled) return;
         settled = true;
-        socket.end();
+        socket.destroy();
         if (err) reject(err);
         else resolve(data);
       };
 
-      socket.setTimeout(15000);
+      socket.setTimeout(timeoutMs);
       socket.on('timeout', () => done(new Error(`Herdr socket request timed out: ${method}`)));
       socket.on('error', (e) => done(e));
       socket.on('data', (d) => {
         buf += d.toString('utf8');
-        // NDJSON: look for a line matching our id.
-        const lines = buf.split('\n');
-        const full = buf;
-        if (full.includes(`"${id}"`)) {
+        let newline: number;
+        while ((newline = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, newline).trim();
+          buf = buf.slice(newline + 1);
+          if (!line) continue;
           try {
-            const last = lines
-              .filter((l) => l.includes(`"${id}"`))
-              .pop();
-            const parsed = JSON.parse(last!);
-            done(null, parsed);
+            const parsed = JSON.parse(line);
+            if (parsed.id === id) done(null, parsed);
           } catch {
-            /* keep buffering until a full line appears */
+            // Partial or unrelated line: keep reading.
           }
         }
       });
 
-      const req = JSON.stringify({ id, method, params });
-      socket.write(req + '\n');
+      socket.write(JSON.stringify({ id, method, params }) + '\n');
     });
   }
 
-  private async call(method: string, params: Record<string, unknown> = {}, errorMsg?: string): Promise<any> {
+  private async call(method: string, params: Record<string, unknown> = {}): Promise<any> {
     const resp = await this.rawRequest(method, params);
     if (resp.error) {
-      throw new Error(errorMsg || `${method} failed: ${resp.error.message || JSON.stringify(resp.error)}`);
+      throw new Error(resp.error.message || `${method} failed: ${JSON.stringify(resp.error)}`);
     }
     return resp.result;
-  }
-
-  async ping(): Promise<boolean> {
-    try {
-      const r = await this.call('ping', {});
-      return r?.type === 'pong';
-    } catch {
-      return false;
-    }
   }
 
   async snapshot(): Promise<Snapshot> {
@@ -215,29 +228,30 @@ export class HerdrClient {
     return r.snapshot as Snapshot;
   }
 
-  async listWorkspaces(): Promise<Workspace[]> {
-    const r = await this.call('workspace.list', {});
-    return r.workspaces as Workspace[];
-  }
-
   async createWorkspace(cwd: string, label: string, focus = false): Promise<{ workspace: Workspace }> {
-    const r = await this.call('workspace.create', { cwd, label, focus });
-    return r;
+    return await this.call('workspace.create', { cwd, label, focus });
   }
 
-  async listTabs(workspaceId: string): Promise<Tab[]> {
-    const r = await this.call('tab.list', { workspace_id: workspaceId });
-    return r.tabs as Tab[];
+  async createTab(
+    workspaceId: string,
+    label?: string | null,
+    focus = false,
+    env?: Record<string, string>
+  ): Promise<{ tab: Tab; root_pane: { pane_id: string } }> {
+    return await this.call('tab.create', {
+      workspace_id: workspaceId,
+      label,
+      focus,
+      ...(env ? { env } : {})
+    });
   }
 
-  async listPanes(workspaceId?: string): Promise<any[]> {
-    const r = await this.call('pane.list', { workspace_id: workspaceId || null });
-    return r.panes as any[];
+  async closeTab(tabId: string): Promise<void> {
+    await this.call('tab.close', { tab_id: tabId });
   }
 
-  async createTab(workspaceId: string, label?: string | null, focus = false): Promise<{ tab: Tab; root_pane: any }> {
-    const r = await this.call('tab.create', { workspace_id: workspaceId, label, focus });
-    return r;
+  async renameTab(tabId: string, label: string): Promise<void> {
+    await this.call('tab.rename', { tab_id: tabId, label });
   }
 
   async focusTab(tabId: string): Promise<void> {
@@ -248,204 +262,110 @@ export class HerdrClient {
     await this.call('workspace.focus', { workspace_id: workspaceId });
   }
 
-  async listAgents(): Promise<Agent[]> {
-    const r = await this.call('agent.list', {});
-    return r.agents as Agent[];
-  }
-
-  async getAgent(target: string): Promise<any> {
-    const r = await this.call('agent.get', { target });
-    return r;
-  }
-
-  async closeTab(tabId: string): Promise<void> {
-    try {
-      await this.call('tab.close', { tab_id: tabId });
-    } catch {
-      // best effort
-    }
-  }
-
-  async renameTab(tabId: string, label: string): Promise<any> {
-    try {
-      return await this.call('tab.rename', { tab_id: tabId, label });
-    } catch {
-      // best effort
-    }
-  }
-
-  async focusPane(paneId: string): Promise<any> {
-    try {
-      return await this.call('pane.focus', { pane_id: paneId });
-    } catch {
-      // best effort
-    }
-  }
-
+  /** Retries while the new pane's shell is not ready yet ("is not an available shell"). */
   async agentStart(
     name: string,
     kind: string,
     paneId: string,
     args: string[] = [],
     timeoutMs = 60000
-  ): Promise<any> {
+  ): Promise<unknown> {
     const start = Date.now();
-    const maxWaitMs = 15000;
-    while (true) {
+    for (;;) {
       try {
-        return await this.rawRequestWithTimeout(
+        const resp = await this.rawRequest(
           'agent.start',
           { name, kind, pane_id: paneId, timeout_ms: timeoutMs, ...(args.length ? { args } : {}) },
           timeoutMs + 10000
         );
-      } catch (err: any) {
-        const msg = String(err?.message || err || '');
-        if (msg.includes('is not an available shell') && Date.now() - start < maxWaitMs) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          continue;
-        }
-        throw err;
+        if (resp.error) throw new Error(resp.error.message || 'agent.start failed');
+        return resp.result;
+      } catch (err) {
+        const msg = String(err instanceof Error ? err.message : err);
+        if (!msg.includes('is not an available shell') || Date.now() - start > 15000) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
   }
 
-  private async rawRequestWithTimeout(
-    method: string,
-    params: Record<string, unknown>,
-    timeoutMs: number
-  ): Promise<any> {
-    const sockPath = this.getSocketPath();
-    if (!fs.existsSync(sockPath)) {
-      await this.ensureServerRunning();
-    }
-    const resp = await new Promise<any>((resolve, reject) => {
+  /**
+   * Live herdr events over the socket. Reconnects with backoff and reports
+   * connection changes, so the extension can go offline without polling.
+   */
+  subscribeEvents(
+    cb: (evt: any) => void,
+    onConnection?: (up: boolean) => void
+  ): () => void {
+    let closed = false;
+    let socket: net.Socket | undefined;
+    let retry: NodeJS.Timeout | undefined;
+    let delay = 1000;
+
+    const schedule = () => {
+      if (closed) return;
+      retry = setTimeout(connect, delay);
+      delay = Math.min(delay * 2, 30000);
+    };
+
+    const connect = () => {
+      if (closed) return;
+      const sockPath = this.getSocketPath();
       if (!fs.existsSync(sockPath)) {
-        return reject(new Error(`Herdr socket not found: ${sockPath}. Is the Herdr server running?`));
+        onConnection?.(false);
+        schedule();
+        return;
       }
-      const socket = net.createConnection(sockPath);
-      const id = `vscode:${Math.random().toString(36).slice(2)}`;
+
+      const s = net.createConnection(sockPath);
+      socket = s;
+      const id = `vscode-sub:${Math.random().toString(36).slice(2)}`;
       let buf = '';
-      let settled = false;
-      const done = (err: Error | null, data?: any) => {
-        if (settled) return;
-        settled = true;
-        socket.end();
-        if (err) reject(err);
-        else resolve(data);
-      };
-      socket.setTimeout(timeoutMs);
-      socket.on('timeout', () => done(new Error(`Herdr socket request timed out: ${method}`)));
-      socket.on('error', (e) => done(e));
-      socket.on('data', (d) => {
-        buf += d.toString('utf8');
-        const lines = buf.split('\n');
-        const full = buf;
-        if (full.includes(`"${id}"`)) {
-          try {
-            const last = lines.filter((l) => l.includes(`"${id}"`)).pop();
-            done(null, JSON.parse(last!));
-          } catch {
-            /* keep buffering */
-          }
-        }
+
+      s.on('connect', () => {
+        delay = 1000;
+        s.write(
+          JSON.stringify({
+            id,
+            method: 'events.subscribe',
+            params: { subscriptions: EVENT_SUBSCRIPTIONS.map((type) => ({ type })) }
+          }) + '\n'
+        );
+        onConnection?.(true);
       });
-      socket.write(JSON.stringify({ id, method, params }) + '\n');
-    });
-    if (resp.error) {
-      throw new Error(resp.error.message || `${method} failed`);
-    }
-    return resp.result;
-  }
-
-  async subscribeEvents(cb: (evt: any) => void): Promise<() => void> {
-    const sockPath = this.getSocketPath();
-    if (!fs.existsSync(sockPath)) {
-      await this.ensureServerRunning();
-    }
-    if (!fs.existsSync(sockPath)) {
-      throw new Error(`Herdr socket not found: ${sockPath}`);
-    }
-    const socket = net.createConnection(sockPath);
-    const id = `vscode-sub:${Math.random().toString(36).slice(2)}`;
-    let buf = '';
-    let acknowledged = false;
-
-    const req = JSON.stringify({
-      id,
-      method: 'events.subscribe',
-      params: {
-        subscriptions: [
-          { type: 'pane.agent_status_changed' },
-          { type: 'pane.created' },
-          { type: 'pane.closed' },
-          { type: 'pane.agent_detected' },
-          { type: 'tab.created' },
-          { type: 'tab.closed' },
-          { type: 'workspace.created' },
-          { type: 'workspace.closed' }
-        ]
-      }
-    });
-
-    return new Promise<() => void>((resolve, reject) => {
-      socket.on('error', (e) => reject(e));
-      socket.on('data', (d) => {
+      s.on('data', (d) => {
         buf += d.toString('utf8');
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.trim()) continue;
+        let newline: number;
+        while ((newline = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, newline).trim();
+          buf = buf.slice(newline + 1);
+          if (!line) continue;
           try {
             const parsed = JSON.parse(line);
-            if (parsed.id && parsed.id === id) {
-              acknowledged = true;
-              resolve(() => {
-                try {
-                  socket.end();
-                } catch {}
-              });
-              continue;
-            }
-            if (parsed.event || parsed.type) {
-              try {
-                cb(parsed);
-              } catch {}
-            }
+            if (parsed.id === id) continue;
+            if (parsed.event || parsed.type) cb(parsed);
           } catch {
-            /* partial line */
+            // Partial line.
           }
         }
       });
-      socket.write(req + '\n');
-      setTimeout(() => {
-        if (!acknowledged) {
-          reject(new Error('Herdr event subscription not acknowledged'));
-        }
-      }, 15000);
-    });
-  }
-}
-
-// ---- Subprocess helpers for one-shot CLI actions not covered by raw methods ----
-
-export function runHerdr(args: string[], cwd?: string, session = 'vscode'): Promise<{ stdout: string; stderr: string; code: number }> {
-  return new Promise((resolve) => {
-    const sessionArgs = session ? ['--session', session, ...args] : args;
-    const sessionDir = session ? path.join(os.homedir(), '.config', 'herdr', 'sessions', session) : '';
-    const configPath = sessionDir ? path.join(sessionDir, 'config.toml') : '';
-    const env = {
-      ...process.env,
-      HERDR_ENV: '1',
-      ...(configPath && fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
+      s.on('error', () => {
+        // 'close' follows and schedules the retry.
+      });
+      s.on('close', () => {
+        if (socket === s) socket = undefined;
+        if (closed) return;
+        onConnection?.(false);
+        schedule();
+      });
     };
-    const child = spawn('herdr', sessionArgs, {
-      cwd: cwd || process.cwd(),
-      env
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d.toString()));
-    child.stderr.on('data', (d) => (stderr += d.toString()));
-    child.on('close', (code) => resolve({ stdout, stderr, code: code ?? -1 }));
-  });
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (retry) clearTimeout(retry);
+      socket?.destroy();
+      socket = undefined;
+    };
+  }
 }

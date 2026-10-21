@@ -1,6 +1,10 @@
 .vscode/**
+.github/**
 .gitignore
 src/**
+test/**
+vitest.config.mjs
 tsconfig.json
 **/*.map
 *.vsix
+media/icon.svg

@@ -1,10 +1,15 @@
 {
-  "name": "herdr-companion",
-  "displayName": "Herdr Companion",
-  "description": "Herdr AI coding agent integration for VS Code: status bar monitor, fast switcher, and focus-on-blocked.",
-  "version": "0.3.0",
+  "name": "herdr-vscode",
+  "displayName": "Herdr for VS Code",
+  "description": "Herdr AI coding agents in VS Code: live status, fast switcher, and focus-on-blocked.",
+  "version": "0.4.0",
   "publisher": "xicu",
   "license": "MIT",
+  "icon": "icon.png",
+  "homepage": "https://herdr.dev",
+  "bugs": {
+    "url": "https://github.com/XicuM/herdr-vscode/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/XicuM/herdr-vscode.git"
@@ -12,19 +17,27 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
     "Other"
   ],
+  "keywords": [
+    "herdr",
+    "ai",
+    "agents",
+    "claude",
+    "codex",
+    "opencode",
+    "terminal"
+  ],
+  "galleryBanner": {
+    "color": "#0b1220",
+    "theme": "dark"
+  },
   "activationEvents": [
-    "onStartupFinished",
-    "onCommand:herdr.switchConversation",
-    "onCommand:herdr.openConversation",
-    "onCommand:herdr.closeConversation",
-    "onCommand:herdr.newConversation",
-    "onCommand:herdr.focusWorkspace",
-    "onCommand:herdr.newShellTab",
-    "onCommand:herdr.diagnose",
-    "onCommand:herdr.refresh"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -55,11 +68,22 @@
       },
       {
         "command": "herdr.closeConversation",
-        "title": "Herdr: Close Conversation"
+        "title": "Herdr: Close Conversation",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "herdr.renameConversation",
+        "title": "Herdr: Rename Agent Tab",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "herdr.sendSelection",
+        "title": "Herdr: Send Selection to Agent",
+        "icon": "$(send)"
       },
       {
         "command": "herdr.openMasterTerminal",
-        "title": "Herdr: Open Master Terminal",
+        "title": "Herdr: Open Herdr Terminal",
         "icon": "$(terminal)"
       },
       {
@@ -74,27 +98,123 @@
       },
       {
         "command": "herdr.refresh",
-        "title": "Herdr: Refresh Conversations",
+        "title": "Herdr: Refresh Agents",
         "icon": "$(refresh)"
       },
       {
         "command": "herdr.diagnose",
-        "title": "Herdr: Diagnose"
+        "title": "Herdr: Diagnose Connection"
       }
     ],
-
+    "menus": {
+      "editor/context": [
+        {
+          "command": "herdr.sendSelection",
+          "when": "editorHasSelection",
+          "group": "9_cutcopypaste@100"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "herdr.newConversation",
+          "when": "view == herdr.agents",
+          "group": "navigation@1"
+        },
+        {
+          "command": "herdr.newShellTab",
+          "when": "view == herdr.agents",
+          "group": "navigation@2"
+        },
+        {
+          "command": "herdr.refresh",
+          "when": "view == herdr.agents",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "herdr.newConversation",
+          "when": "view == herdr.agents && viewItem == herdrFolder",
+          "group": "inline"
+        },
+        {
+          "command": "herdr.newShellTab",
+          "when": "view == herdr.agents && viewItem == herdrFolder",
+          "group": "navigation@1"
+        },
+        {
+          "command": "herdr.focusWorkspace",
+          "when": "view == herdr.agents && viewItem == herdrFolder",
+          "group": "navigation@2"
+        },
+        {
+          "command": "herdr.renameConversation",
+          "when": "view == herdr.agents && viewItem == herdrConversation",
+          "group": "inline@1"
+        },
+        {
+          "command": "herdr.closeConversation",
+          "when": "view == herdr.agents && viewItem == herdrConversation",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "herdr",
+          "title": "Herdr",
+          "icon": "media/herdr.svg"
+        }
+      ]
+    },
+    "views": {
+      "herdr": [
+        {
+          "id": "herdr.agents",
+          "name": "Agents"
+        }
+      ]
+    },
     "configuration": {
       "title": "Herdr",
       "properties": {
         "herdr.focusOnBlocked": {
           "type": "boolean",
           "default": true,
-          "description": "When an agent becomes blocked (waiting for input), focus its VS Code terminal."
+          "description": "When an agent transitions into blocked (waiting for input), show it and notify. The terminal is revealed without stealing editor focus."
         },
         "herdr.session": {
           "type": "string",
           "default": "vscode",
-          "description": "Named Herdr session for VS Code. Defaults to 'vscode' for an isolated instance separated from your desktop session."
+          "description": "Named herdr session used by VS Code. The default keeps this window separate from the desktop session and other clients."
+        },
+        "herdr.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start `herdr server` for this session when no socket exists. Off: the extension only reads state and reports herdr as offline."
+        },
+        "herdr.defaultHarness": {
+          "type": "string",
+          "enum": [
+            "agy",
+            "amp",
+            "claude",
+            "codex",
+            "copilot",
+            "cursor",
+            "devin",
+            "gemini",
+            "grok",
+            "kimi",
+            "kiro",
+            "maki",
+            "opencode",
+            "pi",
+            "qwen"
+          ],
+          "default": "claude",
+          "description": "Harness listed first in the New Agent Conversation picker."
         }
       }
     }
@@ -102,12 +222,15 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package --no-dependencies",
-    "build": "tsc -p ./"
+    "test": "vitest run",
+    "package": "npx --yes @vscode/vsce package --no-dependencies",
+    "vscode:prepublish": "npm run compile",
+    "build": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^3.2.7"
   }
 }
