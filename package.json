@@ -134,17 +134,17 @@
       "view/item/context": [
         {
           "command": "herdr.newConversation",
-          "when": "view == herdr.agents && viewItem == herdrFolder",
+          "when": "view == herdr.agents && viewItem == herdrWorkspace",
           "group": "inline"
         },
         {
           "command": "herdr.newShellTab",
-          "when": "view == herdr.agents && viewItem == herdrFolder",
+          "when": "view == herdr.agents && viewItem == herdrWorkspace",
           "group": "navigation@1"
         },
         {
           "command": "herdr.focusWorkspace",
-          "when": "view == herdr.agents && viewItem == herdrFolder",
+          "when": "view == herdr.agents && viewItem == herdrWorkspace",
           "group": "navigation@2"
         },
         {

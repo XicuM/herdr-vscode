@@ -67,6 +67,7 @@ export interface Workspace {
 export interface Tab {
   tab_id: string;
   workspace_id: string;
+  number?: number;
   label?: string;
   agent_status?: AgentStatus;
   pane_count?: number;
@@ -76,6 +77,7 @@ export interface Pane {
   pane_id: string;
   tab_id: string;
   workspace_id: string;
+  focused?: boolean;
   cwd?: string;
   foreground_cwd?: string;
   agent?: string;
@@ -92,16 +94,30 @@ export interface Snapshot {
   version?: string;
 }
 
+/**
+ * Global events carry structure but not agent status: herdr rejects
+ * `pane.agent_status_changed` without a `pane_id`, so those are subscribed per
+ * pane (see `subscribeEvents`). `pane.updated` is deliberately omitted: it
+ * fires on terminal title churn (spinners), which would snapshot constantly.
+ */
 const EVENT_SUBSCRIPTIONS = [
-  'pane.agent_status_changed',
-  'pane.agent_detected',
-  'pane.created',
-  'pane.closed',
+  'workspace.created',
+  'workspace.renamed',
+  'workspace.moved',
+  'workspace.reordered',
+  'workspace.closed',
+  'workspace.focused',
   'tab.created',
   'tab.closed',
   'tab.renamed',
-  'workspace.created',
-  'workspace.closed'
+  'tab.moved',
+  'tab.focused',
+  'pane.created',
+  'pane.closed',
+  'pane.moved',
+  'pane.focused',
+  'pane.exited',
+  'pane.agent_detected'
 ];
 
 export class HerdrClient {
@@ -110,16 +126,19 @@ export class HerdrClient {
 
   constructor(session = 'vscode') {
     this.session = session;
-    // Match Herdr's socket resolution: default config dir, or named session subdir.
-    const base = path.join(os.homedir(), '.config', 'herdr');
+    // Match Herdr's socket resolution: default config dir (honouring
+    // XDG_CONFIG_HOME), or a named session subdir.
+    const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+    const base = path.join(configHome, 'herdr');
     const sockPath = session
       ? path.join(base, 'sessions', session, 'herdr.sock')
       : path.join(base, 'herdr.sock');
-    this.socketPath = process.env.HERDR_SOCKET_PATH || sockPath;
+    // Do not honour HERDR_SOCKET_PATH: VS Code launched from inside a herdr pane
+    // inherits it, which would silently bypass the isolated `herdr.session`.
+    this.socketPath = sockPath;
   }
 
   getSocketPath(): string {
-    if (process.env.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH;
     return this.socketPath;
   }
 
@@ -140,14 +159,22 @@ export class HerdrClient {
     if (this.isAvailable()) return true;
     try {
       const sessionDir = this.session
-        ? path.join(os.homedir(), '.config', 'herdr', 'sessions', this.session)
+        ? path.join(
+            process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+            'herdr',
+            'sessions',
+            this.session
+          )
         : '';
       if (sessionDir) fs.mkdirSync(sessionDir, { recursive: true });
       const configPath = sessionDir ? path.join(sessionDir, 'config.toml') : '';
-      const env = {
-        ...process.env,
-        ...(configPath && fs.existsSync(configPath) ? { HERDR_CONFIG_PATH: configPath } : {})
-      };
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      // A VS Code launched from inside a herdr pane inherits its socket and pane
+      // variables; a spawned server must not reuse the desktop session.
+      for (const key of Object.keys(env)) {
+        if (key.startsWith('HERDR_')) delete env[key];
+      }
+      if (configPath && fs.existsSync(configPath)) env.HERDR_CONFIG_PATH = configPath;
       const args = this.session ? ['--session', this.session, 'server'] : ['server'];
 
       const child = spawn('herdr', args, { detached: true, stdio: 'ignore', env });
@@ -289,10 +316,13 @@ export class HerdrClient {
   }
 
   /**
-   * Live herdr events over the socket. Reconnects with backoff and reports
-   * connection changes, so the extension can go offline without polling.
+   * Live herdr events over the socket. Global events cover structure; agent
+   * status changes are per pane, so pass the current pane ids from a snapshot.
+   * Reconnects with backoff and reports connection changes, so the extension can
+   * go offline without polling.
    */
   subscribeEvents(
+    paneIds: string[],
     cb: (evt: any) => void,
     onConnection?: (up: boolean) => void
   ): () => void {
@@ -301,10 +331,15 @@ export class HerdrClient {
     let retry: NodeJS.Timeout | undefined;
     let delay = 1000;
 
+    const subscriptions = [
+      ...EVENT_SUBSCRIPTIONS.map((type) => ({ type })),
+      ...paneIds.map((pane_id) => ({ type: 'pane.agent_status_changed', pane_id }))
+    ];
+
     const schedule = () => {
       if (closed) return;
       retry = setTimeout(connect, delay);
-      delay = Math.min(delay * 2, 30000);
+      delay = Math.min(delay * 2, 5000);
     };
 
     const connect = () => {
@@ -320,6 +355,7 @@ export class HerdrClient {
       socket = s;
       const id = `vscode-sub:${Math.random().toString(36).slice(2)}`;
       let buf = '';
+      let acked = false;
 
       s.on('connect', () => {
         delay = 1000;
@@ -327,10 +363,9 @@ export class HerdrClient {
           JSON.stringify({
             id,
             method: 'events.subscribe',
-            params: { subscriptions: EVENT_SUBSCRIPTIONS.map((type) => ({ type })) }
+            params: { subscriptions }
           }) + '\n'
         );
-        onConnection?.(true);
       });
       s.on('data', (d) => {
         buf += d.toString('utf8');
@@ -341,7 +376,19 @@ export class HerdrClient {
           if (!line) continue;
           try {
             const parsed = JSON.parse(line);
-            if (parsed.id === id) continue;
+            if (parsed.id === id) {
+              // Only report "up" once herdr accepts the subscription; an invalid
+              // subscription (e.g. a pane that just closed) used to look online.
+              if (parsed.error) {
+                // Force a snapshot: it brings the current pane ids, and the
+                // extension re-subscribes with them.
+                cb({ type: '__subscribe_error', error: parsed.error });
+              } else if (!acked) {
+                acked = true;
+                onConnection?.(true);
+              }
+              continue;
+            }
             if (parsed.event || parsed.type) cb(parsed);
           } catch {
             // Partial line.

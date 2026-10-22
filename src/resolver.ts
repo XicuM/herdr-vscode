@@ -85,22 +85,34 @@ export class AgentResolver {
   /** One conversation per tab, in herdr's own tab order. */
   buildConversations(snapshot: Snapshot, folderPath: string): Conversation[] {
     const ws = this.findWorkspaceForFolder(snapshot, folderPath);
-    if (!ws) return [];
-    const panes = (snapshot.panes || []).filter((p) => p.workspace_id === ws.workspace_id);
+    return ws ? this.conversationsForWorkspace(snapshot, ws.workspace_id) : [];
+  }
+
+  /** Conversations for a known herdr workspace (the tree is not folder-bound). */
+  conversationsForWorkspace(snapshot: Snapshot, workspaceId: string): Conversation[] {
+    const panes = (snapshot.panes || []).filter((p) => p.workspace_id === workspaceId);
     return (snapshot.tabs || [])
-      .filter((t) => t.workspace_id === ws.workspace_id)
+      .filter((t) => t.workspace_id === workspaceId)
       .map((t) => {
         const tabPanes = panes.filter((p) => p.tab_id === t.tab_id);
-        const pane = tabPanes.find((p) => p.agent) || tabPanes[0] || null;
+        const pane =
+          tabPanes.find((p) => p.focused && p.agent) ||
+          tabPanes.find((p) => p.agent) ||
+          tabPanes.find((p) => p.focused) ||
+          tabPanes[0] ||
+          null;
         const agent = pane?.agent || null;
         const status = (pane?.agent_status || t.agent_status || 'unknown') as AgentStatus;
+        // Herdr auto-labels tabs "1", "2" (the `number` field is global, not the
+        // per-workspace index), so a non-numeric label is a user rename and wins.
+        const customLabel = t.label && !/^\d+$/.test(t.label) ? t.label : null;
         return {
           tab_id: t.tab_id,
-          workspace_id: ws.workspace_id,
+          workspace_id: workspaceId,
           pane_id: pane?.pane_id || t.tab_id.replace(/:t([^:]*)$/, ':p$1'),
           agent,
           status,
-          label: agent || t.label || 'shell',
+          label: customLabel || agent || t.label || 'shell',
           running: !!agent || (t.pane_count ?? 0) > 0
         };
       });

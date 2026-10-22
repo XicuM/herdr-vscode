@@ -1,9 +1,11 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
 import type { AgentStatus } from './herdrClient';
 import type { Conversation } from './resolver';
 
-export interface FolderState {
+export interface WorkspaceState {
+  workspaceId: string;
+  label: string;
+  /** A cwd for new tabs in this workspace (from its first pane, or the active folder). */
   folder: string;
   conversations: Conversation[];
 }
@@ -23,29 +25,26 @@ function statusIcon(status: AgentStatus): vscode.ThemeIcon {
   }
 }
 
-export class FolderNode extends vscode.TreeItem {
-  constructor(readonly state: FolderState) {
-    const known = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(state.folder));
-    super(known?.name ?? path.basename(state.folder) ?? state.folder, vscode.TreeItemCollapsibleState.Expanded);
+export class WorkspaceNode extends vscode.TreeItem {
+  constructor(readonly state: WorkspaceState) {
+    super(state.label, vscode.TreeItemCollapsibleState.Expanded);
+    const agents = state.conversations.filter((c) => c.agent).length;
+    const shells = state.conversations.length - agents;
     const blocked = state.conversations.filter((c) => c.status === 'blocked').length;
-    const total = state.conversations.length;
-    this.id = `folder:${state.folder}`;
-    this.contextValue = 'herdrFolder';
-    this.resourceUri = vscode.Uri.file(state.folder);
+    this.id = `workspace:${state.workspaceId}`;
+    this.contextValue = 'herdrWorkspace';
     this.iconPath = new vscode.ThemeIcon('beaker');
-    this.description =
-      total === 0
-        ? 'no agents'
-        : `${total} agent${total === 1 ? '' : 's'}${blocked ? `, ${blocked} blocked` : ''}`;
-    this.tooltip = state.folder;
+    const parts: string[] = [];
+    if (agents) parts.push(`${agents} agent${agents === 1 ? '' : 's'}`);
+    if (shells) parts.push(`${shells} shell${shells === 1 ? '' : 's'}`);
+    if (blocked) parts.push(`${blocked} blocked`);
+    this.description = parts.join(', ') || 'no tabs';
+    this.tooltip = `${state.label}\n${state.folder}\n${state.workspaceId}`;
   }
 }
 
 export class ConversationNode extends vscode.TreeItem {
-  constructor(
-    readonly conv: Conversation,
-    readonly folder: string
-  ) {
+  constructor(readonly conv: Conversation) {
     super(conv.label, vscode.TreeItemCollapsibleState.None);
     this.id = `tab:${conv.tab_id}`;
     this.contextValue = 'herdrConversation';
@@ -61,24 +60,24 @@ export class ConversationNode extends vscode.TreeItem {
 }
 
 class EmptyNode extends vscode.TreeItem {
-  constructor(folder: string) {
+  constructor(folder?: string) {
     super('No agents — start one', vscode.TreeItemCollapsibleState.None);
     this.iconPath = new vscode.ThemeIcon('plus');
     this.command = {
       command: 'herdr.newConversation',
       title: 'New agent conversation',
-      arguments: [folder]
+      arguments: folder ? [folder] : []
     };
   }
 }
 
-export type HerdrNode = FolderNode | ConversationNode | EmptyNode;
+export type HerdrNode = WorkspaceNode | ConversationNode | EmptyNode;
 
 export class HerdrTreeProvider implements vscode.TreeDataProvider<HerdrNode> {
   private emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
 
-  constructor(private folders: () => FolderState[]) {}
+  constructor(private workspaces: () => WorkspaceState[]) {}
 
   refresh() {
     this.emitter.fire();
@@ -89,12 +88,14 @@ export class HerdrTreeProvider implements vscode.TreeDataProvider<HerdrNode> {
   }
 
   getChildren(element?: HerdrNode): HerdrNode[] {
-    if (!element) return this.folders().map((f) => new FolderNode(f));
-    if (element instanceof FolderNode) {
-      const { folder, conversations } = element.state;
-      return conversations.length
-        ? conversations.map((c) => new ConversationNode(c, folder))
-        : [new EmptyNode(folder)];
+    if (!element) {
+      const states = this.workspaces();
+      return states.length ? states.map((s) => new WorkspaceNode(s)) : [new EmptyNode()];
+    }
+    if (element instanceof WorkspaceNode) {
+      return element.state.conversations.length
+        ? element.state.conversations.map((c) => new ConversationNode(c))
+        : [new EmptyNode(element.state.folder)];
     }
     return [];
   }

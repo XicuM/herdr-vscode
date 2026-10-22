@@ -18,7 +18,7 @@ terminal.
 
 - **Live status, no polling.** Herdr's events drive the UI. The status bar shows
   how many agents are blocked or working; the **Herdr** activity-bar view lists
-  every workspace folder and its agents with status icons.
+  every herdr workspace and its agents with status icons.
 - **Focus on blocked.** When an agent *transitions* into blocked, its conversation
   is revealed and a notification appears. Already-blocked agents at startup never
   steal focus.
@@ -33,20 +33,19 @@ terminal.
   syntax it understands.
 - **Rename tabs** without leaving VS Code, and close a conversation without
   destroying its workspace.
-- **Multi-root folders.** The status bar follows the active editor's folder; the
-  tree shows every folder.
+- **Multi-root folders.** New conversations use the active editor's folder; the
+  status bar and tree cover every herdr workspace, not just the open folder.
 - **Remote-friendly.** The extension runs where your code runs (Remote-SSH, WSL,
   dev containers), so it talks to the herdr installed there.
 
 ## Requirements
 
 - VS Code 1.85 or newer.
-- [herdr](https://herdr.dev) installed and running on the machine where the
-  extension host runs:
+- [herdr](https://herdr.dev) installed on the machine where the extension host
+  runs. The extension uses its own named `vscode` session; **Herdr: Open Herdr
+  Terminal** starts it for you, or start it headlessly:
 
   ```sh
-  herdr
-  # or start a server headlessly:
   herdr --session vscode server
   ```
 
@@ -68,7 +67,9 @@ VSIX from source (`npm run package`) and use **Extensions: Install from VSIX…*
 
 ## Getting started
 
-1. Start herdr (or enable `herdr.autoStart`).
+1. Run **Herdr: Open Herdr Terminal** (or click the offline status bar item).
+   This starts the extension's isolated `vscode` session; `herdr.autoStart` can
+   do it in the background instead.
 2. Open a folder in VS Code and click the Herdr icon in the activity bar.
 3. Run **Herdr: New Agent Conversation** and pick a harness.
 4. The agent appears in the Herdr view and the status bar. Click it to switch.
@@ -104,11 +105,15 @@ bound to keys in **Keyboard Shortcuts**.
 ## How it works
 
 - **Transport.** A direct Unix-socket connection to herdr (`session.snapshot`,
-  `events.subscribe`, and the tab/workspace/agent RPCs). No polling: events
-  trigger one queued snapshot, and the event stream reconnects with backoff.
+  `events.subscribe`, and the tab/workspace/agent RPCs). Structural events
+  (workspaces, tabs, panes) are global; agent status changes are subscribed per
+  pane, because herdr requires a `pane_id` for them. Events trigger one queued
+  snapshot, and the event stream reconnects with backoff. No polling.
 - **Workspace mapping.** Each VS Code workspace folder maps to one herdr
-  workspace, found by pane `cwd` with a label fallback and created on demand. The
-  status bar follows the active editor's folder.
+  workspace, found by pane `cwd` with a label fallback and created on demand. New
+  conversations use that workspace, or the one chosen in the tree. The status bar
+  and tree are session-wide: agents running outside the open folder are still
+  visible and one click away.
 - **Terminal.** One `herdr` TUI terminal per VS Code window, launched with the
   configured session and without inherited `HERDR_*` pane variables. Switching
   conversations focuses the matching herdr workspace and tab and reveals that
@@ -122,14 +127,17 @@ bound to keys in **Keyboard Shortcuts**.
   | Codex | `path:10-20` |
   | Copilot, Grok, Antigravity | `@path:10-20` |
   | pi | `@path:10-20` |
-  | Shell / no agent | `path:10-20` |
+  | Unknown harness | `@path#L10-20` |
 
-  Paths are relative to the folder; files outside it are sent absolute.
+  Paths are relative to the folder; files outside it are sent absolute. Sending
+  is refused when the active tab is a shell rather than an agent.
 
 ## Troubleshooting
 
-- **`Herdr (offline)`.** Check that herdr is running for the configured session,
-  and run **Herdr: Diagnose Connection** for the socket path and last error.
+- **`Herdr (offline)`.** Click the status bar item to start the terminal/session,
+  or run **Herdr: Diagnose Connection** for the socket path and last error. The
+  binary being on `PATH` is not enough: the configured session's socket must
+  exist.
 - **A different session's tabs.** `herdr.session` must match the session you
   started. Changing it restarts the extension's herdr terminal.
 - **Remote windows.** Install and run herdr on the remote machine, not only

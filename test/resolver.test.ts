@@ -117,6 +117,26 @@ describe('buildConversations', () => {
     });
   });
 
+  it('prefers a user-renamed tab label over the harness name', () => {
+    const snap = snapshot({
+      workspaces: [{ workspace_id: 'w1', label: 'proj' }],
+      panes: [{ pane_id: 'p1', tab_id: 't1', workspace_id: 'w1', agent: 'claude', agent_status: 'idle' }],
+      tabs: [{ tab_id: 't1', workspace_id: 'w1', number: 1, label: 'reviewer' }]
+    });
+    const resolver = new AgentResolver({} as HerdrClient);
+    expect(resolver.buildConversations(snap, '/work/proj')[0].label).toBe('reviewer');
+  });
+
+  it('uses the harness name for auto-numbered agent tabs', () => {
+    const snap = snapshot({
+      workspaces: [{ workspace_id: 'w1', label: 'proj' }],
+      panes: [{ pane_id: 'p1', tab_id: 't1', workspace_id: 'w1', agent: 'claude', agent_status: 'idle' }],
+      tabs: [{ tab_id: 't1', workspace_id: 'w1', number: 1, label: '1' }]
+    });
+    const resolver = new AgentResolver({} as HerdrClient);
+    expect(resolver.buildConversations(snap, '/work/proj')[0].label).toBe('claude');
+  });
+
   it('returns [] when there is no workspace', () => {
     const resolver = new AgentResolver({} as HerdrClient);
     expect(resolver.buildConversations(snapshot({}), '/work/proj')).toEqual([]);
