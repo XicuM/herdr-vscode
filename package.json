@@ -73,7 +73,7 @@
       },
       {
         "command": "herdr.renameConversation",
-        "title": "Herdr: Rename Agent Tab",
+        "title": "Herdr: Rename Tab",
         "icon": "$(edit)"
       },
       {
@@ -88,7 +88,7 @@
       },
       {
         "command": "herdr.focusWorkspace",
-        "title": "Herdr: Focus Current Workspace",
+        "title": "Herdr: Focus Workspace",
         "icon": "$(home)"
       },
       {

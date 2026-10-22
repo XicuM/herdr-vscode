@@ -89,7 +89,7 @@ bound to keys in **Keyboard Shortcuts**.
 | `Herdr: Close Conversation` | Close a tab, leaving a shell if it was the last one. |
 | `Herdr: Send Selection to Agent` | Insert a file/line reference into the active agent. |
 | `Herdr: Open Herdr Terminal` | Reveal the herdr TUI terminal. |
-| `Herdr: Focus Current Workspace` | Ask herdr to focus this folder's workspace. |
+| `Herdr: Focus Workspace` | Focus the active folder's workspace, or the one selected in the tree. |
 | `Herdr: Refresh Agents` | Force a snapshot refresh. |
 | `Herdr: Diagnose Connection` | Show socket, session, workspace and tab state. |
 

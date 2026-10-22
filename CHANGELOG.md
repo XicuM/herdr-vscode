@@ -16,7 +16,7 @@ First release as **Herdr for VS Code** (`xicu.herdr-vscode`), superseding
 - Add the **Herdr** activity-bar view: every herdr workspace, its agents, status
   icons, and inline new/rename/close actions.
 - Add **Herdr: Send Selection to Agent**, with per-harness path/line syntax.
-- Add **Herdr: Rename Agent Tab**.
+- Add **Herdr: Rename Tab**.
 - Next/previous now follows herdr's tab order and tracks focus changed inside the
   herdr TUI.
 - Multi-root support: new conversations use the active editor's folder; the
