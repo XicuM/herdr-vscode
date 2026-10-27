@@ -31,6 +31,13 @@ terminal.
 - **Send references.** Select code and run **Herdr: Send Selection to Agent** (or
   the editor context menu). The active harness receives `@path#L10-20` in the
   syntax it understands.
+- **Drag and drop.** Drop files from Explorer or your file manager onto an agent
+  conversation in the Herdr activity-bar view. Multiple files use that agent's
+  mention syntax; dropped text is inserted directly, with multiline text sent as
+  bracketed paste. Content is inserted without submitting the prompt.
+- **Agents open files.** Agents can run `code --reuse-window --goto "path:line:column"`
+  to show a file in the editor. **Herdr: Install Agent Skill (Open Files in VS Code)**
+  adds instructions to the selected workspace for Codex and Claude Code.
 - **Rename tabs** without leaving VS Code, and close a conversation without
   destroying its workspace.
 - **Multi-root folders.** New conversations use the active editor's folder; the
@@ -88,6 +95,7 @@ bound to keys in **Keyboard Shortcuts**.
 | `Herdr: Rename Agent Tab` | Rename the active (or picked) tab in herdr. |
 | `Herdr: Close Conversation` | Close a tab, leaving a shell if it was the last one. |
 | `Herdr: Send Selection to Agent` | Insert a file/line reference into the active agent. |
+| `Herdr: Install Agent Skill (Open Files in VS Code)` | Install file-opening instructions in the selected workspace. |
 | `Herdr: Open Herdr Terminal` | Reveal the herdr TUI terminal. |
 | `Herdr: Focus Workspace` | Focus the active folder's workspace, or the one selected in the tree. |
 | `Herdr: Refresh Agents` | Force a snapshot refresh. |
@@ -131,6 +139,21 @@ bound to keys in **Keyboard Shortcuts**.
 
   Paths are relative to the folder; files outside it are sent absolute. Sending
   is refused when the active tab is a shell rather than an agent.
+- **Drops.** The Herdr view accepts file URI lists, files and selected text on
+  agent conversations. References are relative to the target pane's working
+  directory. Drops and editor references go directly to that pane through
+  `pane.send_text`, without relying on terminal focus. In remote windows, dropped
+  files must already exist on the remote machine; local files are not uploaded.
+  VS Code's native terminal handles its own drops; the extension's harness-aware
+  drop target is the conversation in the Herdr view.
+- **Opening files from agents.** The installed skill uses VS Code's existing
+  `code --reuse-window --goto` CLI, with one-based lines and columns, and requires
+  no bridge. New tabs inherit `VSCODE_IPC_HOOK_CLI` from the extension host when
+  available, routing CLI requests to the originating window. Otherwise the CLI
+  uses the last active window. In remote environments, use VS Code's remote
+  `code` CLI. The command installs `.agents/skills/herdr-open-vscode/SKILL.md` and
+  a `.claude/skills/herdr-open-vscode` symlink; existing files and links are
+  preserved. Restart existing agents to discover newly installed skills.
 
 ## Troubleshooting
 

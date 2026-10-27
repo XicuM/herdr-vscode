@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1
+
+- Updated extension icon and activity bar icon to the minimalistic Herdr ram mascot.
+- Drop files or selected text onto agent conversations in the Herdr view, with
+  harness-specific references, multiple files and bracketed multiline paste.
+- Send references and drops directly to their target pane, avoiding terminal
+  focus races.
+- Add **Install Agent Skill (Open Files in VS Code)**, documenting VS Code's
+  existing `code --reuse-window --goto` command for agents. New tabs inherit
+  the extension host's CLI routing when available.
+
 ## 0.4.0
 
 First release as **Herdr for VS Code** (`xicu.herdr-vscode`), superseding

@@ -1,8 +1,8 @@
 {
-  "name": "herdr-vscode",
+  "name": "herdr-companion",
   "displayName": "Herdr for VS Code",
   "description": "Herdr AI coding agents in VS Code: live status, fast switcher, and focus-on-blocked.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "xicu",
   "license": "MIT",
   "icon": "icon.png",
@@ -82,6 +82,10 @@
         "icon": "$(send)"
       },
       {
+        "command": "herdr.installAgentSkill",
+        "title": "Herdr: Install Agent Skill (Open Files in VS Code)"
+      },
+      {
         "command": "herdr.openMasterTerminal",
         "title": "Herdr: Open Herdr Terminal",
         "icon": "$(terminal)"
@@ -104,6 +108,16 @@
       {
         "command": "herdr.diagnose",
         "title": "Herdr: Diagnose Connection"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "key": "shift+enter",
+        "when": "terminalFocus",
+        "args": {
+          "text": "\n"
+        }
       }
     ],
     "menus": {
@@ -224,6 +238,7 @@
     "watch": "tsc -watch -p ./",
     "test": "vitest run",
     "package": "npx --yes @vscode/vsce package --no-dependencies",
+    "publish": "npx --yes @vscode/vsce publish --no-dependencies",
     "vscode:prepublish": "npm run compile",
     "build": "npm run compile"
   },

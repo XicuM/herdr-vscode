@@ -292,7 +292,13 @@ function isLightTheme(): boolean {
 
 function tabEnv(): Record<string, string> {
   // TUIs read COLORFGBG before their first render; OSC 11 detection is too late.
-  return { COLORFGBG: isLightTheme() ? '0;15' : '15;0' };
+  return {
+    COLORFGBG: isLightTheme() ? '0;15' : '15;0',
+    // Route agents' `code --goto` requests back to this VS Code window.
+    ...(process.env.VSCODE_IPC_HOOK_CLI
+      ? { VSCODE_IPC_HOOK_CLI: process.env.VSCODE_IPC_HOOK_CLI }
+      : {})
+  };
 }
 
 async function pickHarness(): Promise<HarnessKind | undefined> {
@@ -458,11 +464,6 @@ async function sendSelection() {
     showError('the active tab is a shell, not an agent. Open an agent tab first.');
     return;
   }
-  if (!herdrTerminal || herdrTerminal.exitStatus !== undefined) {
-    showError('open a conversation first: the Herdr terminal is not running.');
-    return;
-  }
-
   const owner =
     folderForConversation(conv) ?? folderForActiveEditor() ?? currentFolder();
   const file = referencePath(owner, editor.document.uri.fsPath);
@@ -479,16 +480,8 @@ async function sendSelection() {
 
   const payload = formatReference(conv.agent, file, start, end);
   try {
-    await client.focusWorkspace(conv.workspace_id);
-    await client.focusTab(conv.tab_id);
-  } catch (e) {
-    showError(`could not focus the conversation: ${errorMessage(e)}`);
-    return;
-  }
-  try {
-    const term = ensureHerdrTerminal();
-    term.show(false);
-    term.sendText(payload, false);
+    await client.sendText(conv.pane_id, payload);
+    revealConversation(conv);
   } catch (e) {
     showError(`could not send the reference: ${errorMessage(e)}`);
   }
@@ -658,7 +651,58 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.show();
 
   tree = new HerdrTreeProvider(workspaceStates);
-  context.subscriptions.push(vscode.window.registerTreeDataProvider('herdr.agents', tree));
+  context.subscriptions.push(vscode.window.createTreeView('herdr.agents', {
+    treeDataProvider: tree,
+    dragAndDropController: {
+      dragMimeTypes: [],
+      dropMimeTypes: ['text/uri-list', 'text/plain', 'files'],
+      async handleDrop(target, data, token) {
+        if (!(target instanceof ConversationNode) || !target.conv.agent) {
+          showError('drop files or text onto an agent conversation in the Herdr view.');
+          return;
+        }
+        try {
+          const conv = target.conv;
+          const owner = folderForConversation(conv);
+          const uriList = await data.get('text/uri-list')?.asString();
+          const uris = uriList
+            ? uriList.split(/\r?\n/)
+                .filter((line) => line && !line.startsWith('#'))
+                .map((line) => vscode.Uri.parse(line))
+            : [...data].flatMap(([, item]) => {
+                const uri = item.asFile()?.uri;
+                return uri ? [uri] : [];
+              });
+          let payload = '';
+          if (uris.length) {
+            for (const uri of uris) {
+              const roots = vscode.workspace.workspaceFolders ?? [];
+              const sameHost = roots.some((root) => root.uri.scheme === uri.scheme && root.uri.authority === uri.authority);
+              if ((uri.scheme !== 'file' && uri.scheme !== 'vscode-remote') ||
+                  (!sameHost && (vscode.env.remoteName || uri.scheme !== 'file')) || /[\r\n\x1b]/.test(uri.fsPath)) {
+                throw new Error('dropped files must be paths on the machine running the agent.');
+              }
+              const lines = /^L?(\d+)(?:,\d+)?(?:-L?(\d+)(?:,\d+)?)?$/.exec(uri.fragment);
+              const start = lines ? Number(lines[1]) : undefined;
+              const end = lines ? Number(lines[2] ?? lines[1]) : undefined;
+              payload += formatReference(conv.agent, owner ? referencePath(owner, uri.fsPath) : uri.fsPath, start, end);
+            }
+          } else {
+            payload = await data.get('text/plain')?.asString() ?? '';
+          }
+          if (!payload || token.isCancellationRequested) return;
+          if (/[\r\n]/.test(payload)) {
+            payload = `\x1b[200~${payload.replace(/\x1b\[(?:200|201)~/g, '')}\x1b[201~`;
+          }
+          // Address the pane directly: changing TUI focus before typing can race.
+          await client.sendText(conv.pane_id, payload);
+          revealConversation(conv);
+        } catch (e) {
+          showError(`could not send dropped content: ${errorMessage(e)}`);
+        }
+      }
+    }
+  }));
 
   context.subscriptions.push(
     statusBarItem,
@@ -717,6 +761,29 @@ export function activate(context: vscode.ExtensionContext) {
   });
   command('herdr.renameConversation', (arg?: unknown) => renameConversation(arg));
   command('herdr.sendSelection', () => sendSelection());
+  command('herdr.installAgentSkill', async () => {
+    const folder = vscode.workspace.workspaceFolders?.length === 1
+      ? vscode.workspace.workspaceFolders[0]
+      : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'Install the VS Code file-opening skill in this folder' });
+    if (!folder) return;
+    try {
+      const directory = path.join(folder.uri.fsPath, '.agents', 'skills', 'herdr-open-vscode');
+      await fs.promises.mkdir(directory, { recursive: true });
+      // Exclusive creation preserves any skill the user has already customized.
+      await fs.promises.copyFile(
+        context.asAbsolutePath('skills/herdr-open-vscode/SKILL.md'),
+        path.join(directory, 'SKILL.md'),
+        fs.constants.COPYFILE_EXCL
+      ).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'EEXIST') throw e; });
+      const claudeSkills = path.join(folder.uri.fsPath, '.claude', 'skills');
+      await fs.promises.mkdir(claudeSkills, { recursive: true });
+      await fs.promises.symlink('../../.agents/skills/herdr-open-vscode', path.join(claudeSkills, 'herdr-open-vscode'))
+        .catch((e: NodeJS.ErrnoException) => { if (e.code !== 'EEXIST') throw e; });
+      void vscode.window.showInformationMessage('Herdr: VS Code file-opening skill installed. Restart existing agents to discover it.');
+    } catch (e) {
+      showError(`could not install the agent skill: ${errorMessage(e)}`);
+    }
+  });
   command('herdr.refresh', () => refreshState());
   command('herdr.diagnose', () => diagnose());
 

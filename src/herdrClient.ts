@@ -289,6 +289,10 @@ export class HerdrClient {
     await this.call('workspace.focus', { workspace_id: workspaceId });
   }
 
+  async sendText(paneId: string, text: string): Promise<void> {
+    await this.call('pane.send_text', { pane_id: paneId, text });
+  }
+
   /** Retries while the new pane's shell is not ready yet ("is not an available shell"). */
   async agentStart(
     name: string,
