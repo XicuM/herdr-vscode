@@ -73,13 +73,25 @@ export class AgentResolver {
     return matchingByLabel[0] ?? null;
   }
 
-  /** Ensure a folder has a Herdr workspace; create it without stealing focus. */
-  async ensureWorkspace(folderPath: string, snapshot: Snapshot): Promise<string> {
+  /**
+   * Ensure a folder has a Herdr workspace; create it without stealing focus.
+   * A created workspace already has a first tab: `root` hands it to the caller.
+   */
+  async ensureWorkspace(
+    folderPath: string,
+    snapshot: Snapshot,
+    env?: Record<string, string>
+  ): Promise<{ workspaceId: string; root?: { tab_id: string; pane_id: string } }> {
     const existing = this.findWorkspaceForFolder(snapshot, folderPath);
-    if (existing) return existing.workspace_id;
+    if (existing) return { workspaceId: existing.workspace_id };
     const folder = normPath(folderPath);
-    const created = await this.client.createWorkspace(folder, path.basename(folder), false);
-    return created.workspace.workspace_id;
+    const created = await this.client.createWorkspace(folder, path.basename(folder), false, env);
+    const tab_id = created.tab?.tab_id;
+    const pane_id = created.root_pane?.pane_id;
+    return {
+      workspaceId: created.workspace.workspace_id,
+      ...(tab_id && pane_id ? { root: { tab_id, pane_id } } : {})
+    };
   }
 
   /** One conversation per tab, in herdr's own tab order. */

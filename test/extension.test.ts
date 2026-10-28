@@ -4,7 +4,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 const state = vi.hoisted(() => ({
-  view: undefined as any,
   commands: new Map<string, (...args: any[]) => any>(),
   roots: [{ uri: { fsPath: '/work/project', scheme: 'file', authority: '' } }],
   remoteName: undefined as string | undefined,
@@ -12,6 +11,7 @@ const state = vi.hoisted(() => ({
   client: {
     session: 'vscode',
     isAvailable: () => true,
+    ensureServerRunning: async () => true,
     subscribeEvents: () => () => {},
     snapshot: async () => ({
       workspaces: [{ workspace_id: 'w', label: 'project' }],
@@ -49,14 +49,16 @@ vi.mock('vscode', () => ({
   window: {
     activeColorTheme: { kind: 2 },
     createStatusBarItem: () => ({ show() {}, dispose() {} }),
-    createTreeView: (_id: string, options: unknown) => { state.view = options; return {}; },
     createTerminal: () => ({ show() {}, sendText() {} }),
+    registerWebviewViewProvider: () => ({}),
+    onDidChangeActiveTerminal: () => ({}),
     onDidCloseTerminal: () => ({}),
     onDidChangeActiveTextEditor: () => ({}),
+    onDidChangeActiveColorTheme: () => ({}),
     showInformationMessage: vi.fn(),
     showErrorMessage: state.error
   },
-  commands: { registerCommand: (id: string, handler: (...args: any[]) => any) => {
+  commands: { executeCommand: vi.fn(), registerCommand: (id: string, handler: (...args: any[]) => any) => {
     state.commands.set(id, handler);
     return {};
   } }
@@ -68,7 +70,6 @@ vi.mock('../src/herdrClient', async (importOriginal) => ({
 }));
 
 let extension: typeof import('../src/extension');
-let node: any;
 let scratch: string | undefined;
 
 beforeEach(async () => {
@@ -77,72 +78,16 @@ beforeEach(async () => {
   state.roots = [{ uri: { fsPath: '/work/project', scheme: 'file', authority: '' } }];
   state.remoteName = undefined;
   extension = await import('../src/extension');
-  const { ConversationNode } = await import('../src/tree');
-  node = new ConversationNode({ pane_id: 'p', tab_id: 't', workspace_id: 'w',
-    agent: 'claude', status: 'idle', label: 'claude', running: true });
-  extension.activate({ subscriptions: [],
+  extension.activate({ subscriptions: [], extensionUri: {},
+    workspaceState: { get: (_key: string, fallback: unknown) => fallback, update: vi.fn() },
     asAbsolutePath: (file: string) => path.resolve(file)
   } as any);
-  await vi.waitFor(() => expect(state.view.treeDataProvider.getChildren()).toHaveLength(1));
 });
 
 afterEach(async () => {
   extension.deactivate();
   if (scratch) await fs.rm(scratch, { recursive: true, force: true });
   scratch = undefined;
-});
-
-describe('conversation drops', () => {
-  it('sends multiple decoded file references and a line range directly to the chosen pane', async () => {
-    const data = new Map([['text/uri-list', {
-      asString: async () => '# files\r\nfile:///work/project/my%20notes.md#L3,2-L5,1\r\nfile:///other/file.ts',
-      asFile: () => undefined
-    }]]);
-    await state.view.dragAndDropController.handleDrop(node, data, { isCancellationRequested: false });
-    expect(state.client.sendText).toHaveBeenCalledWith('p', '@"my notes.md#L3-5" @/other/file.ts ');
-    expect(state.client.focusTab).toHaveBeenCalledWith('t');
-  });
-
-  it('brackets multiline selections without submitting or allowing a nested paste terminator', async () => {
-    const data = new Map([['text/plain', {
-      asString: async () => 'first\n\x1b[201~second', asFile: () => undefined
-    }]]);
-    await state.view.dragAndDropController.handleDrop(node, data, { isCancellationRequested: false });
-    expect(state.client.sendText).toHaveBeenCalledWith('p', '\x1b[200~first\nsecond\x1b[201~');
-  });
-
-  it('accepts file-manager file objects without a URI-list entry', async () => {
-    const data = new Map([['application/octet-stream', {
-      asFile: () => ({ uri: { scheme: 'file', authority: '', fsPath: '/work/project/a.ts', fragment: '' } })
-    }]]);
-    await state.view.dragAndDropController.handleDrop(node, data, { isCancellationRequested: false });
-    expect(state.client.sendText).toHaveBeenCalledWith('p', '@a.ts ');
-  });
-
-  it('does not send a cancelled drop or drop onto a shell', async () => {
-    const data = new Map([['text/plain', { asString: async () => 'hello', asFile: () => undefined }]]);
-    await state.view.dragAndDropController.handleDrop(node, data, { isCancellationRequested: true });
-    node.conv.agent = null;
-    await state.view.dragAndDropController.handleDrop(node, data, { isCancellationRequested: false });
-    expect(state.client.sendText).not.toHaveBeenCalled();
-  });
-
-  it('rejects local file paths in a remote window', async () => {
-    state.remoteName = 'ssh-remote';
-    state.roots = [{ uri: { fsPath: '/work/project', scheme: 'vscode-remote', authority: 'ssh-remote+host' } }];
-    const data = new Map([['text/uri-list', { asString: async () => 'file:///work/project/a.ts' }]]);
-    await state.view.dragAndDropController.handleDrop(node, data, { isCancellationRequested: false });
-    expect(state.client.sendText).not.toHaveBeenCalled();
-    expect(state.error).toHaveBeenCalledWith(expect.stringContaining('machine running the agent'));
-  });
-
-  it('accepts files on the connected remote host', async () => {
-    state.remoteName = 'ssh-remote';
-    state.roots = [{ uri: { fsPath: '/work/project', scheme: 'vscode-remote', authority: 'ssh-remote+host' } }];
-    const data = new Map([['text/uri-list', { asString: async () => 'vscode-remote://ssh-remote+host/work/project/a.ts' }]]);
-    await state.view.dragAndDropController.handleDrop(node, data, { isCancellationRequested: false });
-    expect(state.client.sendText).toHaveBeenCalledWith('p', '@a.ts ');
-  });
 });
 
 it('installs a discoverable skill and Claude link, preserving customized content on reinstall', async () => {
@@ -156,4 +101,25 @@ it('installs a discoverable skill and Claude link, preserving customized content
   await state.commands.get('herdr.installAgentSkill')!();
   expect(await fs.readFile(link, 'utf8')).toBe('custom instructions');
   expect(state.error).not.toHaveBeenCalled();
+});
+
+it('locks OpenCode to the VS Code theme only when asked, keeping its other state', async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'herdr-vscode-kv-'));
+  const kv = path.join(stateDir, 'opencode', 'kv.json');
+  const ctx = { subscriptions: [], extensionUri: {},
+    workspaceState: { get: (_key: string, fallback: unknown) => fallback, update: vi.fn() },
+    asAbsolutePath: (file: string) => path.resolve(file)
+  } as any;
+  vi.stubEnv('XDG_STATE_HOME', stateDir);
+  extension.activate(ctx);
+  await expect(fs.access(kv)).rejects.toThrow();
+
+  await fs.mkdir(path.dirname(kv), { recursive: true });
+  await fs.writeFile(kv, JSON.stringify({ theme: 'system' }));
+  vi.stubEnv('HERDR_SYNC_OPENCODE_THEME', '1');
+  extension.activate(ctx);
+  // The mocked VS Code theme is dark (kind 2).
+  expect(JSON.parse(await fs.readFile(kv, 'utf8'))).toEqual({ theme: 'system', theme_mode_lock: 'dark' });
+  vi.unstubAllEnvs();
+  await fs.rm(stateDir, { recursive: true, force: true });
 });

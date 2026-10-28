@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.4.5
+
+- The view is now titled **Herdr: Agents**.
+- The first tab opened in a folder without a herdr workspace no longer leaves an extra
+  empty tab beside it: the new workspace's own first tab is used.
+
+## 0.4.4
+
+- The view's terminal reattaches after its stream ends (herdr restarted, pane exited) instead
+  of staying dead until another tab is picked; clicking a tab switches the terminal at once.
+- Closing the view stops its terminal stream, so herdr gets the pane's size back.
+- Starting an agent no longer closes its tab when a later focus call fails.
+- Closing an agent tab (Delete, middle-click, menu) asks first.
+- Changing `herdr.session` starts that session's server when `herdr.autoStart` is on.
+- A rejected event subscription is retried with backoff instead of leaving live updates off.
+- A herdr server that is slow to accept connections keeps its socket.
+- Requests fail as soon as herdr drops the connection instead of after the 15 s timeout.
+- The tab strip scrolls at normal speed with the wheel; Previous wraps to the last tab.
+- Removed the global Shift+Enter keybinding for integrated terminals; the Herdr view
+  handles Shift+Enter itself.
+- A terminal attach that another client takes over is no longer re-attached with `--takeover`
+  on the next snapshot, which made a stale extension host and the live one fight over a pane.
+
+- One **Herdr** view, like herdr-obsidian: herdr's tabs on top and the active tab's
+  terminal (xterm.js, streamed with `herdr terminal session control`) below. It
+  replaces the native terminal and the left activity-bar **Agents** tree (and its
+  drag-and-drop target).
+- A single `+` opens a new terminal tab; start an agent by running it there.
+- `herdr.autoStart` now defaults to on, so the `vscode` session starts on its own
+  (dev containers and fresh installs no longer show "Herdr is not running").
+
+## 0.4.2
+
+- **Tab strip.** A **Herdr Tabs** view in the panel mirrors herdr's tabs like
+  Obsidian's terminal: agent glyphs, status badges (blocked tabs pulse and
+  scroll into view, working tabs spin), close buttons, double-click or F2 to
+  rename, middle-click to close, drag to reorder and a right-click menu.
+  Drag the view into the Terminal group to dock it above the terminal.
+- Tab order from the strip is remembered per workspace and also drives next/previous.
+- Ctrl+Tab / Ctrl+Shift+Tab cycle tabs while the Herdr terminal has focus (add
+  `herdr.switchNext` and `herdr.switchPrev` to `terminal.integrated.commandsToSkipShell`).
+
 ## 0.4.1
 
 - Updated extension icon and activity bar icon to the minimalistic Herdr ram mascot.

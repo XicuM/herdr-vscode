@@ -69,17 +69,23 @@ describe('ensureWorkspace', () => {
       workspaces: [{ workspace_id: 'w1', label: 'proj' }],
       panes: [{ pane_id: 'p1', tab_id: 't1', workspace_id: 'w1', cwd: '/work/proj' }]
     });
-    expect(await resolver.ensureWorkspace('/work/proj', snap)).toBe('w1');
+    expect(await resolver.ensureWorkspace('/work/proj', snap)).toEqual({ workspaceId: 'w1' });
     expect(createWorkspace).not.toHaveBeenCalled();
   });
 
-  it('creates a workspace labelled after the folder, without focusing it', async () => {
+  it('creates a workspace labelled after the folder, without focusing it, and hands back its first tab', async () => {
     const createWorkspace = vi.fn().mockResolvedValue({
-      workspace: { workspace_id: 'w2', label: 'proj' }
+      workspace: { workspace_id: 'w2', label: 'proj' },
+      tab: { tab_id: 'w2:t1', workspace_id: 'w2' },
+      root_pane: { pane_id: 'w2:p1' }
     });
     const resolver = new AgentResolver({ createWorkspace } as unknown as HerdrClient);
-    expect(await resolver.ensureWorkspace('/work/proj/', snapshot({}))).toBe('w2');
-    expect(createWorkspace).toHaveBeenCalledWith('/work/proj', 'proj', false);
+    const env = { COLORFGBG: '15;0' };
+    expect(await resolver.ensureWorkspace('/work/proj/', snapshot({}), env)).toEqual({
+      workspaceId: 'w2',
+      root: { tab_id: 'w2:t1', pane_id: 'w2:p1' }
+    });
+    expect(createWorkspace).toHaveBeenCalledWith('/work/proj', 'proj', false, env);
   });
 });
 

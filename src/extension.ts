@@ -12,7 +12,8 @@ import {
 import { AgentResolver, Conversation, compareByStatus } from './resolver';
 import { AgentAttender } from './notifier';
 import { formatReference, referencePath } from './mentions';
-import { WorkspaceState, WorkspaceNode, ConversationNode, HerdrTreeProvider } from './tree';
+import { PaneStream } from './paneStream';
+import { TabStrip, StripAction, StripState, orderTabs, moveTab } from './strip';
 
 interface Config {
   focusOnBlocked: boolean;
@@ -24,9 +25,16 @@ interface Config {
 let client: HerdrClient;
 let resolver: AgentResolver;
 let attender: AgentAttender;
-let tree: HerdrTreeProvider;
+let strip: TabStrip;
+/** The active tab's pane, streamed into the view's terminal. */
+let stream: PaneStream | undefined;
+let streamPane: string | undefined;
+let termSize: { cols: number; rows: number } | undefined;
+let store: vscode.Memento;
+/** Tab ids in the order the user dragged them in the strip; herdr has no move-tab call. */
+let tabOrder: string[] = [];
+const TAB_ORDER_KEY = 'herdr.tabOrder';
 let statusBarItem: vscode.StatusBarItem;
-let herdrTerminal: vscode.Terminal | undefined;
 let unsubscribeEvents: (() => void) | undefined;
 
 let snapshot: Snapshot | undefined;
@@ -48,7 +56,7 @@ function getCfg(): Config {
   return {
     focusOnBlocked: conf.get('focusOnBlocked', true),
     session,
-    autoStart: conf.get('autoStart', false),
+    autoStart: conf.get('autoStart', true),
     defaultHarness
   };
 }
@@ -68,17 +76,9 @@ function folders(): string[] {
   return roots && roots.length > 0 ? roots : [os.homedir()];
 }
 
-interface Target {
-  folder: string;
-  workspaceId?: string;
-}
-
-function targetFrom(arg?: unknown): Target {
-  if (typeof arg === 'string') return { folder: arg };
-  if (arg instanceof WorkspaceNode) {
-    return { folder: arg.state.folder, workspaceId: arg.state.workspaceId };
-  }
-  return { folder: currentFolder() };
+/** A folder passed by another command, else the active editor's. */
+function folderFrom(arg?: unknown): string {
+  return typeof arg === 'string' ? arg : currentFolder();
 }
 
 /** The cwd of a workspace's first pane; used for references and new tabs. */
@@ -94,16 +94,6 @@ function folderForConversation(conv: Conversation): string | undefined {
   return pane?.cwd || pane?.foreground_cwd || folderForWorkspace(conv.workspace_id);
 }
 
-function workspaceStates(): WorkspaceState[] {
-  if (!snapshot) return [];
-  return (snapshot.workspaces || []).map((w) => ({
-    workspaceId: w.workspace_id,
-    label: w.label || w.workspace_id,
-    folder: folderForWorkspace(w.workspace_id) ?? currentFolder(),
-    conversations: resolver.conversationsForWorkspace(snapshot!, w.workspace_id)
-  }));
-}
-
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -114,12 +104,12 @@ function showError(message: string) {
 
 async function showOffline() {
   const pick = await vscode.window.showErrorMessage(
-    `Herdr is not running for session "${getCfg().session || 'default'}". Start it, or enable "herdr.autoStart".`,
+    `Herdr is not running for session "${getCfg().session || 'default'}". Make sure the herdr command is installed and on PATH in this environment.`,
     'Open Herdr Terminal'
   );
   if (pick) {
     try {
-      ensureHerdrTerminal().show(false);
+      strip.reveal(false);
     } catch (e) {
       showError(`could not open the terminal: ${errorMessage(e)}`);
     }
@@ -138,7 +128,7 @@ function updateStatusBar(convs: Conversation[]) {
 
   if (connectionError) {
     statusBarItem.text = '$(circle-slash) Herdr (offline)';
-    statusBarItem.tooltip = `${connectionError}\n\nRun herdr, or enable "herdr.autoStart".`;
+    statusBarItem.tooltip = `${connectionError}\n\nMake sure herdr is installed and on PATH.`;
     statusBarItem.show();
     return;
   }
@@ -168,7 +158,21 @@ function updateStatusBar(convs: Conversation[]) {
 function setOffline(message: string) {
   connectionError = message;
   updateStatusBar([]);
-  tree?.refresh();
+  strip?.refresh();
+}
+
+/** This folder's herdr workspace, in the strip's order. */
+function stripTabs(): Conversation[] {
+  if (!snapshot) return [];
+  return orderTabs(resolver.buildConversations(snapshot, currentFolder()), tabOrder);
+}
+
+function stripState(): StripState {
+  return {
+    tabs: stripTabs().map(({ tab_id, agent, status, label }) => ({ tab_id, agent, status, label })),
+    activeId: currentActiveTabId,
+    offline: connectionError
+  };
 }
 
 function allConversations(): Conversation[] {
@@ -178,11 +182,42 @@ function allConversations(): Conversation[] {
   );
 }
 
+function stopStream() {
+  stream?.dispose();
+  stream = undefined;
+  streamPane = undefined;
+}
+
+/** Point the view's terminal at the active tab's pane. */
+function syncStream() {
+  const pane = currentActiveTabId ? convByTab.get(currentActiveTabId)?.pane_id : undefined;
+  if (pane === streamPane || !termSize) return;
+  stream?.dispose();
+  stream = undefined;
+  streamPane = pane;
+  strip.reset();
+  if (pane) {
+    const s: PaneStream = new PaneStream(getCfg().session, pane, termSize.cols, termSize.rows,
+      (bytes) => strip.write(bytes), (reason) => {
+        strip.closed(reason);
+        s.dispose();
+        // Forget the dead stream so the next snapshot or tab click reattaches. Another client
+        // took the pane over (e.g. a stale extension host after a reload): stay detached
+        // instead of taking it back, or the two hosts fight over it forever.
+        if (stream === s) {
+          stream = undefined;
+          if (!/taken over/i.test(reason)) streamPane = undefined;
+        }
+      });
+    stream = s;
+  }
+}
+
 /** Re-render from the last snapshot (cheap; no IPC). */
 function render() {
   if (!snapshot) {
     updateStatusBar([]);
-    tree?.refresh();
+    strip?.refresh();
     return;
   }
   const convs = allConversations();
@@ -192,7 +227,8 @@ function render() {
   }
   attender.setConversations(convs);
   updateStatusBar(convs);
-  tree?.refresh();
+  strip?.refresh();
+  syncStream();
 }
 
 function applySnapshot(snap: Snapshot) {
@@ -206,14 +242,17 @@ function applySnapshot(snap: Snapshot) {
 async function fetchSnapshot(): Promise<void> {
   if (!client.isAvailable()) {
     setOffline(
-      `No herdr socket at ${client.getSocketPath()}. Start herdr, or enable "herdr.autoStart".`
+      `No herdr socket at ${client.getSocketPath()}. Is herdr installed and on PATH?`
     );
     return;
   }
+  const from = client;
   try {
-    applySnapshot(await client.snapshot());
+    const snap = await from.snapshot();
+    // A `herdr.session` change meanwhile: this snapshot belongs to the old session.
+    if (from === client) applySnapshot(snap);
   } catch (e) {
-    setOffline(`Could not read herdr state: ${errorMessage(e)}`);
+    if (from === client) setOffline(`Could not read herdr state: ${errorMessage(e)}`);
   }
 }
 
@@ -228,48 +267,11 @@ function refreshState(): Promise<void> {
   return refreshQueued;
 }
 
-function posixQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function ensureHerdrTerminal(): vscode.Terminal {
-  if (herdrTerminal && herdrTerminal.exitStatus === undefined) return herdrTerminal;
-
-  const cfg = getCfg();
-  // VS Code may be launched from inside a herdr pane and inherit its session
-  // variables. Clear every HERDR_* var so the TUI uses the configured session.
-  const env: Record<string, string | null> = {};
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith('HERDR_')) env[key] = null;
-  }
-  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  const configPath = cfg.session
-    ? path.join(configHome, 'herdr', 'sessions', cfg.session, 'config.toml')
-    : path.join(configHome, 'herdr', 'config.toml');
-  if (fs.existsSync(configPath)) env.HERDR_CONFIG_PATH = configPath;
-
-  herdrTerminal = vscode.window.createTerminal({
-    name: 'Herdr',
-    cwd: currentFolder(),
-    iconPath: new vscode.ThemeIcon('beaker'),
-    color: new vscode.ThemeColor('terminal.ansiCyan'),
-    message: 'Herdr AI coding agents (isolated session)',
-    env
-  });
-
-  const sessionArg = cfg.session ? ` --session ${posixQuote(cfg.session)}` : '';
-  herdrTerminal.sendText(`herdr${sessionArg}`, true);
-  return herdrTerminal;
-}
-
 function revealConversation(conv: Conversation, preserveFocus = false) {
   currentActiveTabId = conv.tab_id;
-  try {
-    ensureHerdrTerminal().show(preserveFocus);
-  } catch (e) {
-    showError(`could not open the terminal: ${errorMessage(e)}`);
-    return;
-  }
+  strip?.refresh();
+  syncStream();
+  strip.reveal(preserveFocus);
   client.focusWorkspace(conv.workspace_id).catch(() => {
     // Best effort: the terminal still shows the current herdr tab.
   });
@@ -279,8 +281,11 @@ function revealConversation(conv: Conversation, preserveFocus = false) {
 }
 
 function conversationFrom(arg?: unknown): Conversation | undefined {
-  if (arg instanceof ConversationNode) return arg.conv;
   if (typeof arg === 'string') return convByTab.get(arg);
+  // Right-click on a strip tab: the webview context carries the tab id.
+  if (arg && typeof arg === 'object' && typeof (arg as { tabId?: unknown }).tabId === 'string') {
+    return convByTab.get((arg as { tabId: string }).tabId);
+  }
   if (arg && typeof arg === 'object' && 'tab_id' in arg) return arg as Conversation;
   return currentActiveTabId ? convByTab.get(currentActiveTabId) : undefined;
 }
@@ -288,6 +293,30 @@ function conversationFrom(arg?: unknown): Conversation | undefined {
 function isLightTheme(): boolean {
   const kind = vscode.window.activeColorTheme.kind;
   return kind === vscode.ColorThemeKind.Light || kind === vscode.ColorThemeKind.HighContrastLight;
+}
+
+/**
+ * Mirrors VS Code's light/dark into OpenCode by locking its theme mode in its state file. OpenCode learns
+ * light/dark only from the terminal's answer to a colour query, and herdr's server-rendered frames never
+ * carry that exchange, so without a lock it falls back to dark. Opt-in (HERDR_SYNC_OPENCODE_THEME=1, set
+ * by PodarcisNest containers) because it overrides the user's own OpenCode theme setting. A running
+ * OpenCode keeps the mode it started with; the next one picks up the new lock.
+ */
+function syncOpencodeTheme(): void {
+  if (process.env.HERDR_SYNC_OPENCODE_THEME !== '1') return;
+  const file = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'opencode', 'kv.json');
+  try {
+    const kv = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    const mode = isLightTheme() ? 'light' : 'dark';
+    if (kv.theme_mode_lock === mode) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Rename into place so a concurrently starting OpenCode never reads a half-written file.
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ...kv, theme_mode_lock: mode }));
+    fs.renameSync(tmp, file);
+  } catch {
+    // Unreadable or read-only: OpenCode keeps its own theme.
+  }
 }
 
 function tabEnv(): Record<string, string> {
@@ -316,8 +345,19 @@ async function pickHarness(): Promise<HarnessKind | undefined> {
   return picked?.harness;
 }
 
+/** A new tab in the folder's workspace. A workspace made for it brings a first tab: use that one. */
+async function openTab(folder: string, label: string | null) {
+  const { workspaceId, root } = await resolver.ensureWorkspace(folder, await client.snapshot(), tabEnv());
+  if (root) {
+    if (label) await client.renameTab(root.tab_id, label);
+    return { workspaceId, tabId: root.tab_id, paneId: root.pane_id };
+  }
+  const created = await client.createTab(workspaceId, label, false, tabEnv());
+  return { workspaceId, tabId: created.tab?.tab_id, paneId: created.root_pane?.pane_id };
+}
+
 async function newConversation(arg?: unknown) {
-  const target = targetFrom(arg);
+  const folder = folderFrom(arg);
   if (!client.isAvailable()) {
     void showOffline();
     return;
@@ -327,13 +367,7 @@ async function newConversation(arg?: unknown) {
 
   let createdTab: string | undefined;
   try {
-    let workspaceId = target.workspaceId;
-    if (!workspaceId) {
-      workspaceId = await resolver.ensureWorkspace(target.folder, await client.snapshot());
-    }
-    const created = await client.createTab(workspaceId, null, false, tabEnv());
-    const paneId = created.root_pane?.pane_id;
-    const tabId = created.tab?.tab_id;
+    const { workspaceId, tabId, paneId } = await openTab(folder, null);
     if (!paneId || !tabId) throw new Error('could not create a conversation pane');
     createdTab = tabId;
 
@@ -346,9 +380,11 @@ async function newConversation(arg?: unknown) {
       },
       () => client.agentStart(name, kind, paneId, [], 45000)
     );
+    // The agent runs: a failing focus call below must not close it.
+    createdTab = undefined;
 
     currentActiveTabId = tabId;
-    ensureHerdrTerminal().show(false);
+    strip.reveal(false);
     await client.focusWorkspace(workspaceId);
     await client.focusTab(tabId);
     await refreshState();
@@ -359,20 +395,15 @@ async function newConversation(arg?: unknown) {
 }
 
 async function newShellTab(arg?: unknown) {
-  const target = targetFrom(arg);
+  const folder = folderFrom(arg);
   if (!client.isAvailable()) {
     void showOffline();
     return;
   }
   try {
-    let workspaceId = target.workspaceId;
-    if (!workspaceId) {
-      workspaceId = await resolver.ensureWorkspace(target.folder, await client.snapshot());
-    }
-    const created = await client.createTab(workspaceId, 'shell', false, tabEnv());
-    const tabId = created.tab?.tab_id;
+    const { workspaceId, tabId } = await openTab(folder, 'shell');
     if (tabId) currentActiveTabId = tabId;
-    ensureHerdrTerminal().show(false);
+    strip.reveal(false);
     await client.focusWorkspace(workspaceId);
     if (tabId) await client.focusTab(tabId);
     await refreshState();
@@ -382,18 +413,15 @@ async function newShellTab(arg?: unknown) {
 }
 
 async function focusWorkspace(arg?: unknown) {
-  const target = targetFrom(arg);
+  const folder = folderFrom(arg);
   if (!client.isAvailable()) {
     void showOffline();
     return;
   }
   try {
-    let workspaceId = target.workspaceId;
-    if (!workspaceId) {
-      workspaceId = await resolver.ensureWorkspace(target.folder, await client.snapshot());
-    }
+    const { workspaceId } = await resolver.ensureWorkspace(folder, await client.snapshot(), tabEnv());
     await client.focusWorkspace(workspaceId);
-    ensureHerdrTerminal().show(false);
+    strip.reveal(false);
     await refreshState();
   } catch (e) {
     showError(`could not focus the workspace: ${errorMessage(e)}`);
@@ -401,6 +429,15 @@ async function focusWorkspace(arg?: unknown) {
 }
 
 async function closeTab(conv: Conversation) {
+  // Delete and middle-click close in one keystroke; an agent's conversation is not cheap to lose.
+  if (conv.agent) {
+    const ok = await vscode.window.showWarningMessage(
+      `Close ${conv.label}? The ${conv.agent} agent in it stops.`,
+      { modal: true },
+      'Close'
+    );
+    if (ok !== 'Close') return;
+  }
   try {
     const snap = await client.snapshot();
     const workspaceTabs = (snap.tabs || []).filter((t) => t.workspace_id === conv.workspace_id);
@@ -449,13 +486,13 @@ async function renameConversation(arg?: unknown) {
   }
 }
 
-async function sendSelection() {
+async function sendSelection(arg?: unknown) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     showError('open a file first.');
     return;
   }
-  const conv = conversationFrom();
+  const conv = conversationFrom(arg);
   if (!conv) {
     showError('no active conversation. Open one from the Herdr view first.');
     return;
@@ -555,28 +592,66 @@ async function pickConversation(action: 'Open' | 'Close' | 'Switch') {
   revealConversation(conv);
 }
 
+/** The strip's tabs, else every tab (a folder with no herdr workspace yet). */
+function navigableTabs(): Conversation[] {
+  const own = stripTabs();
+  return own.length ? own : [...convByTab.values()];
+}
+
 function switchNext() {
-  const convs = [...convByTab.values()];
+  const convs = navigableTabs();
   if (convs.length === 0) return;
   const curr = convs.findIndex((c) => c.tab_id === currentActiveTabId);
   revealConversation(convs[(curr + 1) % convs.length]);
 }
 
 function switchPrev() {
-  const convs = [...convByTab.values()];
+  const convs = navigableTabs();
   if (convs.length === 0) return;
-  const curr = convs.findIndex((c) => c.tab_id === currentActiveTabId);
+  // No active tab: wrap to the last one.
+  const curr = Math.max(0, convs.findIndex((c) => c.tab_id === currentActiveTabId));
   revealConversation(convs[(curr - 1 + convs.length) % convs.length]);
+}
+
+async function onStripAction(action: StripAction) {
+  if (action.cmd === 'new') return newShellTab();
+  if (action.cmd === 'input') return stream?.input(String(action.data));
+  if (action.cmd === 'scroll') return stream?.scroll(action.direction === 'up' ? 'up' : 'down', Number(action.lines) || 3);
+  if (action.cmd === 'resize') {
+    termSize = { cols: Math.max(10, Number(action.cols) || 80), rows: Math.max(5, Number(action.rows) || 24) };
+    if (stream) stream.resize(termSize.cols, termSize.rows);
+    else syncStream();
+    return;
+  }
+  if (typeof action.id !== 'string') return;
+  const conv = convByTab.get(action.id);
+  if (!conv) return;
+  if (action.cmd === 'open') return revealConversation(conv);
+  if (action.cmd === 'close') return closeTab(conv);
+  if (action.cmd === 'rename') {
+    const label = typeof action.label === 'string' ? action.label.trim() : '';
+    if (!label) return;
+    try {
+      await client.renameTab(conv.tab_id, label);
+      await refreshState();
+    } catch (e) {
+      showError(`could not rename the tab: ${errorMessage(e)}`);
+    }
+    return;
+  }
+  if (action.cmd === 'reorder') {
+    const moved = moveTab(stripTabs().map((c) => c.tab_id), action.id, action.target, !!action.before);
+    // Keep other folders' order; forget tabs herdr no longer has.
+    tabOrder = [...moved, ...tabOrder.filter((id) => !moved.includes(id) && convByTab.has(id))];
+    void store.update(TAB_ORDER_KEY, tabOrder);
+    strip.refresh();
+  }
 }
 
 /** Status-bar click: start the session if needed, else straight to a blocked agent. */
 function attend() {
   if (!client.isAvailable()) {
-    try {
-      ensureHerdrTerminal().show(false);
-    } catch (e) {
-      showError(`could not open the terminal: ${errorMessage(e)}`);
-    }
+    strip.reveal(false);
     return;
   }
   const blocked = [...convByTab.values()].find((c) => c.status === 'blocked');
@@ -631,6 +706,23 @@ function syncSubscription() {
   subscribeEvents(ids);
 }
 
+/** Subscribe and read state for the current client, starting its server first when asked. */
+function connect(cfg: Config) {
+  syncSubscription();
+  if (cfg.autoStart) {
+    const from = client;
+    void client.ensureServerRunning().then((running) => {
+      if (from !== client) return;
+      if (!running) {
+        setOffline(`No herdr socket at ${client.getSocketPath()}. Is herdr installed?`);
+        return;
+      }
+      return refreshState();
+    });
+  }
+  void refreshState();
+}
+
 function wireAttender(cfg: Config) {
   attender = new AgentAttender(cfg);
   attender.setOnNotify((message) => void vscode.window.showInformationMessage(message));
@@ -650,73 +742,28 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.tooltip = 'Herdr agent switcher';
   statusBarItem.show();
 
-  tree = new HerdrTreeProvider(workspaceStates);
-  context.subscriptions.push(vscode.window.createTreeView('herdr.agents', {
-    treeDataProvider: tree,
-    dragAndDropController: {
-      dragMimeTypes: [],
-      dropMimeTypes: ['text/uri-list', 'text/plain', 'files'],
-      async handleDrop(target, data, token) {
-        if (!(target instanceof ConversationNode) || !target.conv.agent) {
-          showError('drop files or text onto an agent conversation in the Herdr view.');
-          return;
-        }
-        try {
-          const conv = target.conv;
-          const owner = folderForConversation(conv);
-          const uriList = await data.get('text/uri-list')?.asString();
-          const uris = uriList
-            ? uriList.split(/\r?\n/)
-                .filter((line) => line && !line.startsWith('#'))
-                .map((line) => vscode.Uri.parse(line))
-            : [...data].flatMap(([, item]) => {
-                const uri = item.asFile()?.uri;
-                return uri ? [uri] : [];
-              });
-          let payload = '';
-          if (uris.length) {
-            for (const uri of uris) {
-              const roots = vscode.workspace.workspaceFolders ?? [];
-              const sameHost = roots.some((root) => root.uri.scheme === uri.scheme && root.uri.authority === uri.authority);
-              if ((uri.scheme !== 'file' && uri.scheme !== 'vscode-remote') ||
-                  (!sameHost && (vscode.env.remoteName || uri.scheme !== 'file')) || /[\r\n\x1b]/.test(uri.fsPath)) {
-                throw new Error('dropped files must be paths on the machine running the agent.');
-              }
-              const lines = /^L?(\d+)(?:,\d+)?(?:-L?(\d+)(?:,\d+)?)?$/.exec(uri.fragment);
-              const start = lines ? Number(lines[1]) : undefined;
-              const end = lines ? Number(lines[2] ?? lines[1]) : undefined;
-              payload += formatReference(conv.agent, owner ? referencePath(owner, uri.fsPath) : uri.fsPath, start, end);
-            }
-          } else {
-            payload = await data.get('text/plain')?.asString() ?? '';
-          }
-          if (!payload || token.isCancellationRequested) return;
-          if (/[\r\n]/.test(payload)) {
-            payload = `\x1b[200~${payload.replace(/\x1b\[(?:200|201)~/g, '')}\x1b[201~`;
-          }
-          // Address the pane directly: changing TUI focus before typing can race.
-          await client.sendText(conv.pane_id, payload);
-          revealConversation(conv);
-        } catch (e) {
-          showError(`could not send dropped content: ${errorMessage(e)}`);
-        }
-      }
-    }
+  store = context.workspaceState;
+  tabOrder = store.get<string[]>(TAB_ORDER_KEY, []);
+  // A reloaded or closed view: drop the stream until the view reports its size again.
+  strip = new TabStrip(context.extensionUri, stripState, (action) => void onStripAction(action), () => {
+    stopStream();
+    termSize = undefined;
+  });
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider(TabStrip.viewType, strip, {
+    webviewOptions: { retainContextWhenHidden: true }
   }));
 
+  syncOpencodeTheme();
   context.subscriptions.push(
     statusBarItem,
-    vscode.window.onDidCloseTerminal((term) => {
-      if (term === herdrTerminal) herdrTerminal = undefined;
-    }),
+    vscode.window.onDidChangeActiveColorTheme(() => syncOpencodeTheme()),
     vscode.window.onDidChangeActiveTextEditor(() => render()),
     vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshState()),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('herdr.session')) {
         unsubscribeEvents?.();
         unsubscribeEvents = undefined;
-        herdrTerminal?.dispose();
-        herdrTerminal = undefined;
+        stopStream();
         const next = getCfg();
         client = new HerdrClient(next.session);
         resolver = new AgentResolver(client);
@@ -725,8 +772,7 @@ export function activate(context: vscode.ExtensionContext) {
         convByTab.clear();
         currentActiveTabId = undefined;
         subscribedPaneKey = undefined;
-        syncSubscription();
-        void refreshState();
+        connect(next);
       }
       if (e.affectsConfiguration('herdr')) {
         attender.updateConfig(getCfg());
@@ -739,13 +785,7 @@ export function activate(context: vscode.ExtensionContext) {
   const command = (id: string, handler: (...args: any[]) => any) =>
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
 
-  command('herdr.openMasterTerminal', () => {
-    try {
-      ensureHerdrTerminal().show(false);
-    } catch (e) {
-      showError(`could not open the terminal: ${errorMessage(e)}`);
-    }
-  });
+  command('herdr.openMasterTerminal', () => strip.reveal(false));
   command('herdr.focusWorkspace', (folder?: unknown) => focusWorkspace(folder));
   command('herdr.newShellTab', (folder?: unknown) => newShellTab(folder));
   command('herdr.newConversation', (folder?: unknown) => newConversation(folder));
@@ -760,7 +800,7 @@ export function activate(context: vscode.ExtensionContext) {
     if (conv) return closeTab(conv);
   });
   command('herdr.renameConversation', (arg?: unknown) => renameConversation(arg));
-  command('herdr.sendSelection', () => sendSelection());
+  command('herdr.sendSelection', (arg?: unknown) => sendSelection(arg));
   command('herdr.installAgentSkill', async () => {
     const folder = vscode.workspace.workspaceFolders?.length === 1
       ? vscode.workspace.workspaceFolders[0]
@@ -787,20 +827,11 @@ export function activate(context: vscode.ExtensionContext) {
   command('herdr.refresh', () => refreshState());
   command('herdr.diagnose', () => diagnose());
 
-  syncSubscription();
-  if (cfg.autoStart) {
-    void client.ensureServerRunning().then((running) => {
-      if (!running) {
-        setOffline(`No herdr socket at ${client.getSocketPath()}. Is herdr installed?`);
-        return;
-      }
-      return refreshState();
-    });
-  }
-  void refreshState();
+  connect(cfg);
 }
 
 export function deactivate() {
+  stopStream();
   unsubscribeEvents?.();
   unsubscribeEvents = undefined;
   statusBarItem?.dispose();

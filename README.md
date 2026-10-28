@@ -5,7 +5,7 @@
 > **Unofficial.** A community extension for [herdr](https://herdr.dev), not made or endorsed by its authors.
 
 Herdr is the terminal workspace manager for AI coding agents. This extension brings
-its agents into VS Code: live status in the status bar and activity bar, quick
+its agents into VS Code: live status in the status bar and a tab panel, quick
 switching, focus-on-blocked, and file references in each harness's own syntax —
 while the agents keep running in herdr and the terminal stays the native VS Code
 terminal.
@@ -17,8 +17,8 @@ terminal.
 ## Features
 
 - **Live status, no polling.** Herdr's events drive the UI. The status bar shows
-  how many agents are blocked or working; the **Herdr** activity-bar view lists
-  every herdr workspace and its agents with status icons.
+  how many agents are blocked or working; the **Herdr: Agents** panel lists
+  this folder's herdr tabs with status icons.
 - **Focus on blocked.** When an agent *transitions* into blocked, its conversation
   is revealed and a notification appears. Already-blocked agents at startup never
   steal focus.
@@ -31,17 +31,13 @@ terminal.
 - **Send references.** Select code and run **Herdr: Send Selection to Agent** (or
   the editor context menu). The active harness receives `@path#L10-20` in the
   syntax it understands.
-- **Drag and drop.** Drop files from Explorer or your file manager onto an agent
-  conversation in the Herdr activity-bar view. Multiple files use that agent's
-  mention syntax; dropped text is inserted directly, with multiline text sent as
-  bracketed paste. Content is inserted without submitting the prompt.
 - **Agents open files.** Agents can run `code --reuse-window --goto "path:line:column"`
   to show a file in the editor. **Herdr: Install Agent Skill (Open Files in VS Code)**
   adds instructions to the selected workspace for Codex and Claude Code.
 - **Rename tabs** without leaving VS Code, and close a conversation without
   destroying its workspace.
 - **Multi-root folders.** New conversations use the active editor's folder; the
-  status bar and tree cover every herdr workspace, not just the open folder.
+  status bar covers every herdr workspace, not just the open folder.
 - **Remote-friendly.** The extension runs where your code runs (Remote-SSH, WSL,
   dev containers), so it talks to the herdr installed there.
 
@@ -75,11 +71,11 @@ VSIX from source (`npm run package`) and use **Extensions: Install from VSIX…*
 ## Getting started
 
 1. Run **Herdr: Open Herdr Terminal** (or click the offline status bar item).
-   This starts the extension's isolated `vscode` session; `herdr.autoStart` can
-   do it in the background instead.
-2. Open a folder in VS Code and click the Herdr icon in the activity bar.
+   The extension's isolated `vscode` session starts automatically when VS Code
+   opens (`herdr.autoStart`); this command just reveals its terminal.
+2. Open a folder in VS Code and open the **Herdr** tab in the bottom panel (drag it to the secondary side bar to dock it on the right). It shows herdr's tabs with the active terminal below.
 3. Run **Herdr: New Agent Conversation** and pick a harness.
-4. The agent appears in the Herdr view and the status bar. Click it to switch.
+4. The agent appears in the Herdr: Agents panel and the status bar. Click it to switch.
 
 Commands are available from the Command Palette (`Ctrl/Cmd+Shift+P`) and can be
 bound to keys in **Keyboard Shortcuts**.
@@ -97,7 +93,7 @@ bound to keys in **Keyboard Shortcuts**.
 | `Herdr: Send Selection to Agent` | Insert a file/line reference into the active agent. |
 | `Herdr: Install Agent Skill (Open Files in VS Code)` | Install file-opening instructions in the selected workspace. |
 | `Herdr: Open Herdr Terminal` | Reveal the herdr TUI terminal. |
-| `Herdr: Focus Workspace` | Focus the active folder's workspace, or the one selected in the tree. |
+| `Herdr: Focus Workspace` | Focus the active folder's workspace, or the one that owns the active tab. |
 | `Herdr: Refresh Agents` | Force a snapshot refresh. |
 | `Herdr: Diagnose Connection` | Show socket, session, workspace and tab state. |
 
@@ -107,7 +103,7 @@ bound to keys in **Keyboard Shortcuts**.
 | --- | --- | --- |
 | `herdr.focusOnBlocked` | `true` | Reveal a conversation when it *transitions* into blocked. |
 | `herdr.session` | `vscode` | Named herdr session, isolated from the desktop session. |
-| `herdr.autoStart` | `false` | Start `herdr server` when no socket exists. |
+| `herdr.autoStart` | `true` | Start `herdr server` when no socket exists. |
 | `herdr.defaultHarness` | `claude` | Harness listed first in the new-conversation picker. |
 
 ## How it works
@@ -119,8 +115,8 @@ bound to keys in **Keyboard Shortcuts**.
   snapshot, and the event stream reconnects with backoff. No polling.
 - **Workspace mapping.** Each VS Code workspace folder maps to one herdr
   workspace, found by pane `cwd` with a label fallback and created on demand. New
-  conversations use that workspace, or the one chosen in the tree. The status bar
-  and tree are session-wide: agents running outside the open folder are still
+  conversations use that workspace. The status bar
+  is session-wide: agents running outside the open folder are still
   visible and one click away.
 - **Terminal.** One `herdr` TUI terminal per VS Code window, launched with the
   configured session and without inherited `HERDR_*` pane variables. Switching
@@ -139,13 +135,6 @@ bound to keys in **Keyboard Shortcuts**.
 
   Paths are relative to the folder; files outside it are sent absolute. Sending
   is refused when the active tab is a shell rather than an agent.
-- **Drops.** The Herdr view accepts file URI lists, files and selected text on
-  agent conversations. References are relative to the target pane's working
-  directory. Drops and editor references go directly to that pane through
-  `pane.send_text`, without relying on terminal focus. In remote windows, dropped
-  files must already exist on the remote machine; local files are not uploaded.
-  VS Code's native terminal handles its own drops; the extension's harness-aware
-  drop target is the conversation in the Herdr view.
 - **Opening files from agents.** The installed skill uses VS Code's existing
   `code --reuse-window --goto` CLI, with one-based lines and columns, and requires
   no bridge. New tabs inherit `VSCODE_IPC_HOOK_CLI` from the extension host when
@@ -185,4 +174,3 @@ npm run package   # build a .vsix with @vscode/vsce
 | `src/resolver.ts` | Folder → workspace → conversation mapping, status order. |
 | `src/notifier.ts` | Transition-only blocked notifications (pure, injectable). |
 | `src/mentions.ts` | Per-harness file/line reference syntax. |
-| `src/tree.ts` | Activity-bar Herdr view. |

@@ -122,6 +122,8 @@ const EVENT_SUBSCRIPTIONS = [
 
 export class HerdrClient {
   private socketPath: string;
+  /** The named session's config dir; empty for the default session. */
+  private sessionDir: string;
   public readonly session: string;
 
   constructor(session = 'vscode') {
@@ -130,12 +132,10 @@ export class HerdrClient {
     // XDG_CONFIG_HOME), or a named session subdir.
     const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
     const base = path.join(configHome, 'herdr');
-    const sockPath = session
-      ? path.join(base, 'sessions', session, 'herdr.sock')
-      : path.join(base, 'herdr.sock');
+    this.sessionDir = session ? path.join(base, 'sessions', session) : '';
     // Do not honour HERDR_SOCKET_PATH: VS Code launched from inside a herdr pane
     // inherits it, which would silently bypass the isolated `herdr.session`.
-    this.socketPath = sockPath;
+    this.socketPath = path.join(this.sessionDir || base, 'herdr.sock');
   }
 
   getSocketPath(): string {
@@ -151,21 +151,28 @@ export class HerdrClient {
     }
   }
 
+  /** False only when nobody listens: a slow server under load must keep its socket. */
+  private hasListener(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const sock = net.createConnection(this.getSocketPath());
+      sock.setTimeout(1000, () => { sock.destroy(); resolve(true); });
+      sock.once('connect', () => { sock.destroy(); resolve(true); });
+      sock.once('error', (e: NodeJS.ErrnoException) => resolve(e.code !== 'ECONNREFUSED'));
+    });
+  }
+
   /**
    * Start `herdr server` for this session. Only called when the user opts into
    * auto-start: every request must stay side-effect free.
    */
   async ensureServerRunning(): Promise<boolean> {
-    if (this.isAvailable()) return true;
+    if (this.isAvailable()) {
+      if (await this.hasListener()) return true;
+      // A socket file with nobody behind it, left by a server that died (a container restart).
+      try { fs.rmSync(this.getSocketPath(), { force: true }); } catch { /* spawn below reports it */ }
+    }
     try {
-      const sessionDir = this.session
-        ? path.join(
-            process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-            'herdr',
-            'sessions',
-            this.session
-          )
-        : '';
+      const sessionDir = this.sessionDir;
       if (sessionDir) fs.mkdirSync(sessionDir, { recursive: true });
       const configPath = sessionDir ? path.join(sessionDir, 'config.toml') : '';
       const env: NodeJS.ProcessEnv = { ...process.env };
@@ -222,6 +229,7 @@ export class HerdrClient {
       socket.setTimeout(timeoutMs);
       socket.on('timeout', () => done(new Error(`Herdr socket request timed out: ${method}`)));
       socket.on('error', (e) => done(e));
+      socket.on('close', () => done(new Error(`Herdr closed the connection without answering: ${method}`)));
       socket.on('data', (d) => {
         buf += d.toString('utf8');
         let newline: number;
@@ -255,8 +263,14 @@ export class HerdrClient {
     return r.snapshot as Snapshot;
   }
 
-  async createWorkspace(cwd: string, label: string, focus = false): Promise<{ workspace: Workspace }> {
-    return await this.call('workspace.create', { cwd, label, focus });
+  /** The new workspace comes with a first tab and pane. */
+  async createWorkspace(
+    cwd: string,
+    label: string,
+    focus = false,
+    env?: Record<string, string>
+  ): Promise<{ workspace: Workspace; tab: Tab; root_pane: { pane_id: string } }> {
+    return await this.call('workspace.create', { cwd, label, focus, ...(env ? { env } : {}) });
   }
 
   async createTab(
@@ -360,9 +374,9 @@ export class HerdrClient {
       const id = `vscode-sub:${Math.random().toString(36).slice(2)}`;
       let buf = '';
       let acked = false;
+      let rejected = false;
 
       s.on('connect', () => {
-        delay = 1000;
         s.write(
           JSON.stringify({
             id,
@@ -385,10 +399,15 @@ export class HerdrClient {
               // subscription (e.g. a pane that just closed) used to look online.
               if (parsed.error) {
                 // Force a snapshot: it brings the current pane ids, and the
-                // extension re-subscribes with them.
+                // extension re-subscribes with them. Retry too (with backoff), in
+                // case the pane set is unchanged: each retry's snapshot keeps the
+                // state fresh even if herdr never accepts the subscription.
+                rejected = true;
                 cb({ type: '__subscribe_error', error: parsed.error });
+                s.destroy();
               } else if (!acked) {
                 acked = true;
+                delay = 1000;
                 onConnection?.(true);
               }
               continue;
@@ -405,7 +424,8 @@ export class HerdrClient {
       s.on('close', () => {
         if (socket === s) socket = undefined;
         if (closed) return;
-        onConnection?.(false);
+        // A rejected subscription is not herdr going away.
+        if (!rejected) onConnection?.(false);
         schedule();
       });
     };

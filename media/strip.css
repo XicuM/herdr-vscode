@@ -1,0 +1,205 @@
+:root {
+  --tab-h: 31px;
+}
+
+html, body {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-panel-background));
+  color: var(--vscode-foreground);
+  font: var(--vscode-font-size, 13px) var(--vscode-font-family, sans-serif);
+  user-select: none;
+}
+
+#bar {
+  display: flex;
+  align-items: stretch;
+  min-height: var(--tab-h);
+}
+
+/* One row that scrolls sideways, as in VS Code; the scrollbar shows thin on hover. */
+#tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-bottom: 1px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+#tabs:hover { scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+#tabs::-webkit-scrollbar { height: 3px; }
+/* Empty space after the last tab to double-click, kept even when the tabs overflow. */
+#tabs::after { content: ''; flex: 1 0 24px; }
+
+/* Tabs follow VS Code's own: a 31px tab in a 32px bar, an inset rounded fill on hover, the active tab raised
+   with rounded top corners and a 1px edge, running down into the terminal below it. */
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: var(--tab-h);
+  box-sizing: border-box;
+  padding: 0 6.5px 0 6px;
+  cursor: pointer;
+  color: var(--vscode-tab-inactiveForeground);
+  outline-offset: -1px;
+}
+
+.tab > * { position: relative; z-index: 1; }
+
+.tab::before {
+  content: '';
+  position: absolute;
+  inset: 3.5px 2px;
+  border-radius: 4px;
+  z-index: 0;
+}
+
+.tab:hover::before { inset: 0; background: var(--vscode-tab-hoverBackground, var(--vscode-toolbar-hoverBackground)); }
+.tab:hover { color: var(--vscode-tab-hoverForeground, var(--vscode-tab-inactiveForeground)); }
+
+/* Divider between tabs; none beside the active tab or after the last one. */
+.tab::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 1px;
+  height: 16px;
+  margin-top: -8px;
+  background: var(--vscode-tab-border);
+}
+.tab.active::after,
+.tab:has(+ .tab.active)::after,
+.tab:last-of-type::after { display: none; }
+
+.tab.active { color: var(--vscode-foreground); }
+.tab.active::before {
+  inset: 0 0 -1px 0;
+  border: 1px solid var(--vscode-tab-border);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: var(--vscode-terminal-background, var(--vscode-panel-background));
+}
+
+.tab:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+.tab.dragging { opacity: 0.4; }
+.tab.drop-before { box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
+.tab.drop-after { box-shadow: inset -2px 0 0 var(--vscode-focusBorder); }
+
+/* Status colour for the tab's pill, as the usage pill in herdr-mobile: the logo in the colour, on a faint tint of it. */
+.tab { --c: var(--vscode-descriptionForeground); }
+.status-working { --c: var(--vscode-charts-yellow, #e5c100); }
+.status-blocked { --c: var(--vscode-charts-red, #f14c4c); }
+.status-done { --c: var(--vscode-charts-green, #3fb950); }
+
+/* The icon slot is 16px with a 6px gap, like a file icon; the pill is just a little larger. */
+.glyph {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--c);
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+}
+
+.glyph.logo svg { width: 12px; height: 12px; }
+
+.glyph.shell { font-family: var(--vscode-editor-font-family, monospace); }
+
+.status-working .glyph { animation: pill-pulse 1.8s ease-in-out infinite; }
+
+@keyframes pill-pulse {
+  50% { opacity: 0.55; }
+}
+
+.label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rename {
+  width: 120px;
+  font: inherit;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 2px;
+  padding: 0 4px;
+  outline: none;
+}
+
+/* The close button is a 20px box around a 16px icon, shown on the active tab and on hover. */
+.close {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-left: 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  opacity: 0;
+}
+
+/* VS Code's own close icon: the codicon font's 'close-small' glyph (U+ECEE), drawn as the workbench draws it.
+   The font file is subset to that glyph. Codicons: https://github.com/microsoft/vscode-codicons (CC BY 4.0, MIT). */
+@font-face {
+  font-family: codicon;
+  src: url(vendor/codicon-close.ttf) format('truetype');
+}
+.close::before {
+  content: '\ecee';
+  font: normal normal 16px/1 codicon;
+  text-rendering: auto;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tab:hover .close,
+.tab.active .close,
+.tab:focus-within .close { opacity: 1; }
+
+.close:hover { background: var(--vscode-toolbar-hoverBackground); }
+
+.empty {
+  align-self: center;
+  padding: 0 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Blocked tabs pulse: they are waiting for you. */
+.status-blocked:not(.active)::before { animation: pulse 1.6s ease-in-out infinite; }
+
+@keyframes pulse {
+  50% { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 22%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-blocked:not(.active)::before { animation: none; background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 18%, transparent); }
+  .status-working .glyph { animation: none; }
+}
+
+#bar { flex: none; }
+
+#term {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 0 0 8px;
+  background: var(--vscode-terminal-background, var(--vscode-panel-background));
+}
+#term .xterm { height: 100%; }
+/* xterm.css paints the viewport black; the part below the last full row showed as a strip. */
+#term .xterm-viewport { background-color: var(--vscode-terminal-background, var(--vscode-panel-background)) !important; }

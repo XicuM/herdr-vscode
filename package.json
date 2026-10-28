@@ -2,7 +2,7 @@
   "name": "herdr-companion",
   "displayName": "Herdr for VS Code",
   "description": "Herdr AI coding agents in VS Code: live status, fast switcher, and focus-on-blocked.",
-  "version": "0.4.1",
+  "version": "0.4.5",
   "publisher": "xicu",
   "license": "MIT",
   "icon": "icon.png",
@@ -112,12 +112,14 @@
     ],
     "keybindings": [
       {
-        "command": "workbench.action.terminal.sendSequence",
-        "key": "shift+enter",
-        "when": "terminalFocus",
-        "args": {
-          "text": "\n"
-        }
+        "command": "herdr.switchNext",
+        "key": "ctrl+tab",
+        "when": "focusedView == herdr.tabs"
+      },
+      {
+        "command": "herdr.switchPrev",
+        "key": "ctrl+shift+tab",
+        "when": "focusedView == herdr.tabs"
       }
     ],
     "menus": {
@@ -128,65 +130,39 @@
           "group": "9_cutcopypaste@100"
         }
       ],
-      "view/title": [
-        {
-          "command": "herdr.newConversation",
-          "when": "view == herdr.agents",
-          "group": "navigation@1"
-        },
-        {
-          "command": "herdr.newShellTab",
-          "when": "view == herdr.agents",
-          "group": "navigation@2"
-        },
-        {
-          "command": "herdr.refresh",
-          "when": "view == herdr.agents",
-          "group": "navigation@3"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "herdr.newConversation",
-          "when": "view == herdr.agents && viewItem == herdrWorkspace",
-          "group": "inline"
-        },
-        {
-          "command": "herdr.newShellTab",
-          "when": "view == herdr.agents && viewItem == herdrWorkspace",
-          "group": "navigation@1"
-        },
-        {
-          "command": "herdr.focusWorkspace",
-          "when": "view == herdr.agents && viewItem == herdrWorkspace",
-          "group": "navigation@2"
-        },
+      "webview/context": [
         {
           "command": "herdr.renameConversation",
-          "when": "view == herdr.agents && viewItem == herdrConversation",
-          "group": "inline@1"
+          "when": "webviewId == 'herdr.tabs' && webviewSection == 'tab'",
+          "group": "1_edit@1"
+        },
+        {
+          "command": "herdr.sendSelection",
+          "when": "webviewId == 'herdr.tabs' && webviewSection == 'tab' && isAgent",
+          "group": "1_edit@2"
         },
         {
           "command": "herdr.closeConversation",
-          "when": "view == herdr.agents && viewItem == herdrConversation",
-          "group": "inline@2"
+          "when": "webviewId == 'herdr.tabs' && webviewSection == 'tab'",
+          "group": "2_close@1"
         }
       ]
     },
     "viewsContainers": {
-      "activitybar": [
+      "panel": [
         {
-          "id": "herdr",
+          "id": "herdrTabs",
           "title": "Herdr",
           "icon": "media/herdr.svg"
         }
       ]
     },
     "views": {
-      "herdr": [
+      "herdrTabs": [
         {
-          "id": "herdr.agents",
-          "name": "Agents"
+          "id": "herdr.tabs",
+          "name": "Agents",
+          "type": "webview"
         }
       ]
     },
@@ -205,8 +181,8 @@
         },
         "herdr.autoStart": {
           "type": "boolean",
-          "default": false,
-          "description": "Start `herdr server` for this session when no socket exists. Off: the extension only reads state and reports herdr as offline."
+          "default": true,
+          "description": "Start `herdr server` for this session when the extension activates and no socket exists. Off: the extension only reads state and reports herdr as offline."
         },
         "herdr.defaultHarness": {
           "type": "string",
@@ -234,7 +210,7 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "compile": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "vitest run",
     "package": "npx --yes @vscode/vsce package --no-dependencies",
