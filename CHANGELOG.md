@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.6
+
+- The panel tab and extension icon are now a robot instead of the herdr mascot.
+
 ## 0.4.5
 
 - The view is now titled **Herdr: Agents**.
