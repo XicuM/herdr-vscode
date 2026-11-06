@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.7
+
+- **Herdr** now opens in the secondary side bar (on the right, beside Chat) instead of the bottom
+  panel. Drag it to the panel or the primary side bar to move it. Requires VS Code 1.104 or later.
+
 ## 0.4.6
 
 - The panel tab and extension icon are now a robot instead of the herdr mascot.

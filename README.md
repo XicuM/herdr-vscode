@@ -5,7 +5,7 @@
 > **Unofficial.** A community extension for [herdr](https://herdr.dev), not made or endorsed by its authors.
 
 Herdr is the terminal workspace manager for AI coding agents. This extension brings
-its agents into VS Code: live status in the status bar and a tab panel, quick
+its agents into VS Code: live status in the status bar and a tab view, quick
 switching, focus-on-blocked, and file references in each harness's own syntax —
 while the agents keep running in herdr and the terminal stays the native VS Code
 terminal.
@@ -73,7 +73,7 @@ VSIX from source (`npm run package`) and use **Extensions: Install from VSIX…*
 1. Run **Herdr: Open Herdr Terminal** (or click the offline status bar item).
    The extension's isolated `vscode` session starts automatically when VS Code
    opens (`herdr.autoStart`); this command just reveals its terminal.
-2. Open a folder in VS Code and open the **Herdr** tab in the bottom panel (drag it to the secondary side bar to dock it on the right). It shows herdr's tabs with the active terminal below.
+2. Open a folder in VS Code and open the **Herdr** tab in the secondary side bar on the right (drag it to the panel or the primary side bar to dock it elsewhere). It shows herdr's tabs with the active terminal below.
 3. Run **Herdr: New Agent Conversation** and pick a harness.
 4. The agent appears in the Herdr: Agents panel and the status bar. Click it to switch.
 
